@@ -101,6 +101,11 @@ def createSconsTasks(File sconsExecutableFile, boolean clean) {
         defaultArgs << "meta_headers=${meta_headers}"
     }
 
+    String pico_headers = project.hasProperty("pico_headers") ? project.property("pico_headers") : ""
+    if (pico_headers != null && !pico_headers.isEmpty()) {
+        defaultArgs << "pico_headers=${pico_headers}"
+    }
+
     if (clean) {
         defaultArgs << "-c"
     }

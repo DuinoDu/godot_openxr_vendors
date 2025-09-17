@@ -79,6 +79,7 @@
 #include "extensions/openxr_meta_recommended_layer_resolution_extension_wrapper.h"
 #include "extensions/openxr_meta_simultaneous_hands_and_controllers_extension_wrapper.h"
 #include "extensions/openxr_meta_spatial_entity_mesh_extension_wrapper.h"
+#include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 
 #include "classes/openxr_fb_hand_tracking_mesh.h"
 #include "classes/openxr_fb_passthrough_geometry.h"
@@ -172,6 +173,7 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			GDREGISTER_CLASS(OpenXRFbAndroidSurfaceSwapchainCreateExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRHtcFacialTrackingExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRHtcPassthroughExtensionWrapper);
+			GDREGISTER_CLASS(OpenXRPicoSecureMRExtensionWrapper);
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED
@@ -277,6 +279,10 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 				_register_extension_with_openxr(OpenXRHtcPassthroughExtensionWrapper::get_singleton());
 			}
 
+			if (_get_bool_project_setting("xr/openxr/extensions/pico/secure_mixed_reality")) {
+				_register_extension_with_openxr(OpenXRPicoSecureMRExtensionWrapper::get_singleton());
+			}
+
 			// Only works with Godot 4.5 or later.
 			if (godot::internal::godot_version.minor >= 5) {
 				GDREGISTER_CLASS(OpenXRFbSpaceWarpExtensionWrapper);
@@ -312,6 +318,7 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			_register_extension_as_singleton(OpenXRFbBodyTrackingExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRHtcFacialTrackingExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRHtcPassthroughExtensionWrapper::get_singleton());
+			_register_extension_as_singleton(OpenXRPicoSecureMRExtensionWrapper::get_singleton());
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED
@@ -460,6 +467,9 @@ void add_plugin_project_settings() {
 	_add_bool_project_setting(project_settings, "xr/openxr/extensions/meta/composition_layer_settings", true);
 	_add_bool_project_setting(project_settings, "xr/openxr/extensions/meta/dynamic_resolution", true);
 	_add_bool_project_setting(project_settings, "xr/openxr/extensions/meta/headset_id", false);
+
+	// Pico
+	_add_bool_project_setting(project_settings, "xr/openxr/extensions/pico/secure_mixed_reality", false);
 
 	// Only works with Godot 4.5 or later.
 	if (godot::internal::godot_version.minor >= 5) {

@@ -37,6 +37,8 @@
 
 using namespace godot;
 
+// @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
+#ifdef META_HEADERS_ENABLED
 class OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper : public OpenXRExtensionWrapperExtension {
 	GDCLASS(OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper, OpenXRExtensionWrapperExtension);
 
@@ -94,3 +96,29 @@ private:
 		nullptr, // next
 	};
 };
+#else
+// Stub implementation when META headers are not available.
+class OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper : public OpenXRExtensionWrapperExtension {
+	GDCLASS(OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper, OpenXRExtensionWrapperExtension);
+
+public:
+	static OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper *get_singleton() {
+		static OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper *s = memnew(OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper);
+		return s;
+	}
+
+	OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper() {}
+	~OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper() {}
+
+	godot::Dictionary _get_requested_extensions() override { return {}; }
+	uint64_t _set_system_properties_and_get_next_pointer(void *p_next_pointer) override { return reinterpret_cast<uint64_t>(p_next_pointer); }
+	void _on_instance_created(uint64_t p_instance) override {}
+	void _on_instance_destroyed() override {}
+	bool is_simultaneous_hands_and_controllers_supported() { return false; }
+	void resume_simultaneous_hands_and_controllers_tracking() {}
+	void pause_simultaneous_hands_and_controllers_tracking() {}
+
+protected:
+	static void _bind_methods() {}
+};
+#endif

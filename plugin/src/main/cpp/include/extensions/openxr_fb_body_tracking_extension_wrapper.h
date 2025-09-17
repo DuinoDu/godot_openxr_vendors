@@ -118,13 +118,18 @@ public:
 	bool is_full_body_tracking_supported();
 
 private:
-	bool meta_body_tracking_full_body_ext = false;
+    // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
+#ifdef META_HEADERS_ENABLED
+    bool meta_body_tracking_full_body_ext = false;
 
-	XrSystemPropertiesBodyTrackingFullBodyMETA system_body_tracking_full_body_properties{
-		XR_TYPE_SYSTEM_PROPERTIES_BODY_TRACKING_FULL_BODY_META, // type
-		nullptr, // next
-		false, // supportsFullBodyTracking
-	};
+    XrSystemPropertiesBodyTrackingFullBodyMETA system_body_tracking_full_body_properties{
+        XR_TYPE_SYSTEM_PROPERTIES_BODY_TRACKING_FULL_BODY_META, // type
+        nullptr, // next
+        false, // supportsFullBodyTracking
+    };
+#else
+    bool meta_body_tracking_full_body_ext = false; // remains for API; always false without META headers
+#endif
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED

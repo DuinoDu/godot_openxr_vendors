@@ -6,6 +6,7 @@ import os
 env = SConscript("thirdparty/godot-cpp/SConstruct")
 opts = Variables('custom.py', ARGUMENTS)
 opts.Add(PathVariable("meta_headers", "Path to the directory containing Meta OpenXR preview headers", None))
+opts.Add(PathVariable("pico_headers", "Path to the directory containing Pico OpenXR extra headers", None))
 opts.Update(env)
 
 # Add common includes
@@ -22,6 +23,17 @@ if meta_headers:
         meta_headers = os.path.dirname(meta_headers)
     env.Append(CPPDEFINES=["META_HEADERS_ENABLED"])
     env.Append(CPPPATH=[meta_headers])
+
+# Include Pico OpenXR extra headers if provided
+pico_headers = env.get("pico_headers")
+if pico_headers:
+    pico_headers = os.path.normpath(pico_headers)
+    if os.path.basename(pico_headers) == "openxr":
+        pico_headers = os.path.dirname(pico_headers)
+    # Ensure Pico headers are searched before the built-in OpenXR headers so that
+    # they provide the augmented OpenXR headers (with PICO extensions).
+    env.Append(CPPDEFINES=["PICO_HEADERS_ENABLED"])
+    env.Prepend(CPPPATH=[pico_headers])
 
 sources = []
 sources += Glob("#plugin/src/main/cpp/*.cpp")

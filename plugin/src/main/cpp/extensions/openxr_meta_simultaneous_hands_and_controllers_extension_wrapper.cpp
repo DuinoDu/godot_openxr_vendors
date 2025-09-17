@@ -1,3 +1,6 @@
+// Only compile this implementation when META preview headers are provided.
+#ifdef META_HEADERS_ENABLED
+
 /**************************************************************************/
 /*  openxr_meta_simultaneous_hands_and_controllers_extension_wrapper.cpp  */
 /**************************************************************************/
@@ -124,3 +127,5 @@ bool OpenXRMetaSimultaneousHandsAndControllersExtensionWrapper::initialize_meta_
 
 	return true;
 }
+
+#endif // META_HEADERS_ENABLED

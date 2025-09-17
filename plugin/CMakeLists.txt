@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(GODOT_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}/../thirdparty/godot-cpp")
 set(OPENXR_HEADERS_DIR "${CMAKE_CURRENT_LIST_DIR}/../thirdparty/openxr/include")
+set(PICO_HEADERS_DIR "")
 set(COMMON_LIB_HEADERS_DIR "${CMAKE_CURRENT_LIST_DIR}/src/main/cpp/include")
 
 # Get sources
@@ -26,6 +27,7 @@ target_include_directories(${PROJECT_NAME}
         "${GODOT_CPP_DIR}/gen/include"
         "${GODOT_CPP_DIR}/gdextension"
         ${OPENXR_HEADERS_DIR}
+        ${PICO_HEADERS_DIR}
         ${COMMON_LIB_HEADERS_DIR}
 )
 

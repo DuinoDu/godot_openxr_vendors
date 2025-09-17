@@ -1,0 +1,14 @@
+[gd_resource type="ProjectSettings" format=4]
+
+[application]
+config/name="Pico SecureMR MNIST"
+
+[xr]
+openxr/enabled=true
+openxr/extensions/pico/secure_mixed_reality=true
+pico/secure_mr/image_width=1280
+pico/secure_mr/image_height=720
+pico/secure_mr/display_gltf=true
+
+[rendering]
+renderer/rendering_method="mobile"

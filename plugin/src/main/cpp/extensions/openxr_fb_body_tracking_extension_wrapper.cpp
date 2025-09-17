@@ -126,14 +126,20 @@ static const JointMapEntry joint_table[] = {
 	{ XRBodyTracker::JOINT_RIGHT_PINKY_FINGER_TIP, XR_BODY_JOINT_RIGHT_HAND_LITTLE_TIP_FB, Quaternion(0.5, 0.5, -0.5, 0.5) },
 
 	// Lower body joints
-	{ XRBodyTracker::JOINT_LEFT_UPPER_LEG, XR_FULL_BODY_JOINT_LEFT_UPPER_LEG_META, Quaternion(0.5, -0.5, 0.5, 0.5) },
-	{ XRBodyTracker::JOINT_LEFT_LOWER_LEG, XR_FULL_BODY_JOINT_LEFT_LOWER_LEG_META, Quaternion(-0.5, 0.5, 0.5, 0.5) },
-	{ XRBodyTracker::JOINT_LEFT_FOOT, XR_FULL_BODY_JOINT_LEFT_FOOT_ANKLE_META, Quaternion(-0.5, -0.5, -0.5, 0.5) },
-	{ XRBodyTracker::JOINT_LEFT_TOES, XR_FULL_BODY_JOINT_LEFT_FOOT_BALL_META, Quaternion(0.5, 0.5, -0.5, 0.5) },
-	{ XRBodyTracker::JOINT_RIGHT_UPPER_LEG, XR_FULL_BODY_JOINT_RIGHT_UPPER_LEG_META, Quaternion(-0.5, -0.5, -0.5, 0.5) },
-	{ XRBodyTracker::JOINT_RIGHT_LOWER_LEG, XR_FULL_BODY_JOINT_RIGHT_LOWER_LEG_META, Quaternion(0.5, 0.5, -0.5, 0.5) },
-	{ XRBodyTracker::JOINT_RIGHT_FOOT, XR_FULL_BODY_JOINT_RIGHT_FOOT_ANKLE_META, Quaternion(0.5, -0.5, 0.5, 0.5) },
-	{ XRBodyTracker::JOINT_RIGHT_TOES, XR_FULL_BODY_JOINT_RIGHT_FOOT_BALL_META, Quaternion(-0.5, 0.5, 0.5, 0.5) },
+// @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
+#ifdef META_HEADERS_ENABLED
+    { XRBodyTracker::JOINT_LEFT_UPPER_LEG, XR_FULL_BODY_JOINT_LEFT_UPPER_LEG_META, Quaternion(0.5, -0.5, 0.5, 0.5) },
+    { XRBodyTracker::JOINT_LEFT_LOWER_LEG, XR_FULL_BODY_JOINT_LEFT_LOWER_LEG_META, Quaternion(-0.5, 0.5, 0.5, 0.5) },
+    { XRBodyTracker::JOINT_LEFT_FOOT, XR_FULL_BODY_JOINT_LEFT_FOOT_ANKLE_META, Quaternion(-0.5, -0.5, -0.5, 0.5) },
+    { XRBodyTracker::JOINT_LEFT_TOES, XR_FULL_BODY_JOINT_LEFT_FOOT_BALL_META, Quaternion(0.5, 0.5, -0.5, 0.5) },
+#endif
+    // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
+#ifdef META_HEADERS_ENABLED
+    { XRBodyTracker::JOINT_RIGHT_UPPER_LEG, XR_FULL_BODY_JOINT_RIGHT_UPPER_LEG_META, Quaternion(-0.5, -0.5, -0.5, 0.5) },
+    { XRBodyTracker::JOINT_RIGHT_LOWER_LEG, XR_FULL_BODY_JOINT_RIGHT_LOWER_LEG_META, Quaternion(0.5, 0.5, -0.5, 0.5) },
+    { XRBodyTracker::JOINT_RIGHT_FOOT, XR_FULL_BODY_JOINT_RIGHT_FOOT_ANKLE_META, Quaternion(0.5, -0.5, 0.5, 0.5) },
+    { XRBodyTracker::JOINT_RIGHT_TOES, XR_FULL_BODY_JOINT_RIGHT_FOOT_BALL_META, Quaternion(-0.5, 0.5, 0.5, 0.5) },
+#endif
 };
 
 OpenXRFbBodyTrackingExtensionWrapper *OpenXRFbBodyTrackingExtensionWrapper::singleton = nullptr;
@@ -149,8 +155,11 @@ OpenXRFbBodyTrackingExtensionWrapper::OpenXRFbBodyTrackingExtensionWrapper() :
 		OpenXRExtensionWrapperExtension() {
 	ERR_FAIL_COND_MSG(singleton != nullptr, "An OpenXRFbBodyTrackingExtensionWrapper singleton already exists.");
 
-	request_extensions[XR_FB_BODY_TRACKING_EXTENSION_NAME] = &fb_body_tracking_ext;
-	request_extensions[XR_META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME] = &meta_body_tracking_full_body_ext;
+    request_extensions[XR_FB_BODY_TRACKING_EXTENSION_NAME] = &fb_body_tracking_ext;
+// @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
+#ifdef META_HEADERS_ENABLED
+    request_extensions[XR_META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME] = &meta_body_tracking_full_body_ext;
+#endif
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED
@@ -191,8 +200,8 @@ void OpenXRFbBodyTrackingExtensionWrapper::_bind_methods() {
 }
 
 void OpenXRFbBodyTrackingExtensionWrapper::cleanup() {
-	fb_body_tracking_ext = false;
-	meta_body_tracking_full_body_ext = false;
+    fb_body_tracking_ext = false;
+    meta_body_tracking_full_body_ext = false;
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED
@@ -206,10 +215,13 @@ uint64_t OpenXRFbBodyTrackingExtensionWrapper::_set_system_properties_and_get_ne
 		system_body_tracking_properties.next = p_next_pointer;
 		p_next_pointer = &system_body_tracking_properties;
 	}
-	if (meta_body_tracking_full_body_ext) {
-		system_body_tracking_full_body_properties.next = p_next_pointer;
-		p_next_pointer = &system_body_tracking_full_body_properties;
-	}
+// @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
+#ifdef META_HEADERS_ENABLED
+    if (meta_body_tracking_full_body_ext) {
+        system_body_tracking_full_body_properties.next = p_next_pointer;
+        p_next_pointer = &system_body_tracking_full_body_properties;
+    }
+#endif
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED
@@ -275,11 +287,13 @@ void OpenXRFbBodyTrackingExtensionWrapper::_on_session_created(uint64_t instance
 		return;
 	}
 
-	// Create the body-tracker handle
-	XrBodyJointSetFB body_joint_set = XR_BODY_JOINT_SET_DEFAULT_FB;
-	if (meta_body_tracking_full_body_ext && is_full_body_tracking_supported()) {
-		body_joint_set = XR_BODY_JOINT_SET_FULL_BODY_META;
-	}
+    // Create the body-tracker handle
+    XrBodyJointSetFB body_joint_set = XR_BODY_JOINT_SET_DEFAULT_FB;
+#ifdef META_HEADERS_ENABLED
+    if (meta_body_tracking_full_body_ext && is_full_body_tracking_supported()) {
+        body_joint_set = XR_BODY_JOINT_SET_FULL_BODY_META;
+    }
+#endif
 
 	XrBodyTrackerCreateInfoFB createInfo = {
 		XR_TYPE_BODY_TRACKER_CREATE_INFO_FB, // type
@@ -360,14 +374,17 @@ void OpenXRFbBodyTrackingExtensionWrapper::_on_process() {
 	}
 #endif // META_HEADERS_ENABLED
 
-	// Construct the locations struct.
-	uint32_t fb_joint_count = XR_BODY_JOINT_COUNT_FB;
-	bool is_full_body_supported = is_full_body_tracking_supported();
-	if (meta_body_tracking_full_body_ext && is_full_body_supported) {
-		fb_joint_count = XR_FULL_BODY_JOINT_COUNT_META;
-	}
-
-	XrBodyJointLocationFB fb_locations[XR_FULL_BODY_JOINT_COUNT_META];
+    // Construct the locations struct.
+    uint32_t fb_joint_count = XR_BODY_JOINT_COUNT_FB;
+    bool is_full_body_supported = is_full_body_tracking_supported();
+#ifdef META_HEADERS_ENABLED
+    if (meta_body_tracking_full_body_ext && is_full_body_supported) {
+        fb_joint_count = XR_FULL_BODY_JOINT_COUNT_META;
+    }
+    XrBodyJointLocationFB fb_locations[XR_FULL_BODY_JOINT_COUNT_META];
+#else
+    XrBodyJointLocationFB fb_locations[XR_BODY_JOINT_COUNT_FB];
+#endif
 	XrBodyJointLocationsFB locations = {
 		XR_TYPE_BODY_JOINT_LOCATIONS_FB, // type
 		next_pointer, // next
@@ -489,7 +506,11 @@ bool OpenXRFbBodyTrackingExtensionWrapper::initialize_fb_body_tracking_extension
 // META_body_tracking_full_body extension.
 
 bool OpenXRFbBodyTrackingExtensionWrapper::is_full_body_tracking_supported() {
-	return system_body_tracking_full_body_properties.supportsFullBodyTracking;
+#ifdef META_HEADERS_ENABLED
+    return system_body_tracking_full_body_properties.supportsFullBodyTracking;
+#else
+    return false;
+#endif
 }
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
