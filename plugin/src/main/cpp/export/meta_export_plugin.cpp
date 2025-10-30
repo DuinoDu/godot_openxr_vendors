@@ -228,14 +228,9 @@ PackedStringArray MetaEditorExportPlugin::_get_supported_devices() const {
 }
 
 PackedStringArray MetaEditorExportPlugin::_get_export_features(const Ref<EditorExportPlatform> &platform, bool debug) const {
-	PackedStringArray features;
+	PackedStringArray features = OpenXRVendorsEditorExportPlugin::_get_export_features(platform, debug);
 	if (!_supports_platform(platform) || !_is_vendor_plugin_enabled()) {
 		return features;
-	}
-
-	// Add the eye tracking feature if necessary
-	if ((bool)ProjectSettings::get_singleton()->get_setting_with_override("xr/openxr/extensions/eye_gaze_interaction")) {
-		features.append(EYE_GAZE_INTERACTION_FEATURE);
 	}
 
 	// Add a feature to indicate that this is a hybrid app.
@@ -449,6 +444,8 @@ String MetaEditorExportPlugin::_get_android_manifest_element_contents(const Ref<
 	int boundary_mode = _get_int_option("meta_xr_features/boundary_mode", BOUNDARY_ENABLED_VALUE);
 	if (boundary_mode == BOUNDARY_DISABLED_VALUE) {
 		contents += "    <uses-feature tools:node=\"replace\" android:name=\"com.oculus.feature.BOUNDARYLESS_APP\" android:required=\"true\" />\n";
+		// This overrides the default in plugin/src/main/AndroidManifest.xml, changing "required" to "true", which the Horizon store requires.
+		contents += "    <uses-feature android:name=\"android.hardware.vr.headtracking\" android:required=\"true\" android:version=\"1\" tools:node=\"replace\" />\n";
 	}
 
 	// Add camera permissions if needed.

@@ -139,7 +139,9 @@ android {
     }
 
     packagingOptions {
-        doNotStrip '**/*.so'
+        if (shouldNotStrip()) {
+            doNotStrip '**/*.so'
+        }
     }
 
     compileOptions {
