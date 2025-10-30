@@ -65,8 +65,9 @@ protected:
 	static void _bind_methods();
 
 private:
-	Dictionary _face_tracking_option;
-	Dictionary _hand_tracking_option;
+    Dictionary _face_tracking_option;
+    Dictionary _hand_tracking_option;
+    Dictionary _secure_mr_option;
 
 	bool _is_eye_tracking_enabled() const;
 

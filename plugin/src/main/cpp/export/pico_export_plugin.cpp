@@ -56,6 +56,16 @@ PicoEditorExportPlugin::PicoEditorExportPlugin() {
 			HAND_TRACKING_LOWFREQUENCY_VALUE,
 			false);
 
+	_secure_mr_option = _generate_export_option(
+			"pico_xr_features/secure_mr",
+			"",
+			Variant::Type::BOOL,
+			PROPERTY_HINT_NONE,
+			"",
+			PROPERTY_USAGE_DEFAULT,
+			false,
+			false);
+
 	ProjectSettings::get_singleton()->connect("settings_changed", callable_mp(this, &PicoEditorExportPlugin::_project_settings_changed));
 }
 
@@ -70,6 +80,7 @@ TypedArray<Dictionary> PicoEditorExportPlugin::_get_export_options(const Ref<Edi
 	export_options.append(_get_vendor_toggle_option());
 	export_options.append(_face_tracking_option);
 	export_options.append(_hand_tracking_option);
+	export_options.append(_secure_mr_option);
 
 	return export_options;
 }
@@ -171,6 +182,11 @@ String PicoEditorExportPlugin::_get_android_manifest_application_element_content
 		if (hand_tracking == HAND_TRACKING_HIGHFREQUENCY_VALUE) {
 			contents += "        <meta-data tools:node=\"replace\" android:name=\"Hand_Tracking_HighFrequency\" android:value=\"1\" />\n";
 		}
+	}
+
+	// SecureMR
+	if (_get_bool_option("pico_xr_features/secure_mr")) {
+		contents += "        <meta-data tools:node=\"replace\" android:name=\"pvr.app.secure_mr\" android:value=\"1\" />\n";
 	}
 
 	return contents;

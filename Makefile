@@ -1,7 +1,6 @@
-.PHONY: build clean
+.PHONY: build
 
 build:
-	./gradlew -Ppico_headers=thirdparty/openxr_pico/include/openxr buildPlugin
-
-clean:
-	./gradlew clean
+	./gradlew buildPlugin
+	@rm -rf samples/pico-securemr-mnist/addons/godotopenxrvendors
+	cp -r demo/addons/godotopenxrvendors samples/pico-securemr-mnist/addons/

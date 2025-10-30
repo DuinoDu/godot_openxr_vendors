@@ -80,6 +80,7 @@
 #include "extensions/openxr_meta_simultaneous_hands_and_controllers_extension_wrapper.h"
 #include "extensions/openxr_meta_spatial_entity_mesh_extension_wrapper.h"
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
+#include "classes/openxr_pico_secure_mr.h"
 
 #include "classes/openxr_fb_hand_tracking_mesh.h"
 #include "classes/openxr_fb_passthrough_geometry.h"
@@ -174,6 +175,7 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			GDREGISTER_CLASS(OpenXRHtcFacialTrackingExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRHtcPassthroughExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRPicoSecureMRExtensionWrapper);
+            GDREGISTER_CLASS(OpenXRPicoSecureMR);
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED

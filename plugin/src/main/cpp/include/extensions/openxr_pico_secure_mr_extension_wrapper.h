@@ -78,6 +78,11 @@ public:
     uint64_t create_operator_convert_color(uint64_t pipeline_handle, int32_t convert_code);
     uint64_t create_operator_normalize(uint64_t pipeline_handle, int32_t normalize_type);
     uint64_t create_operator_model(uint64_t pipeline_handle, PackedByteArray model_data, String model_name, String input_name, PackedStringArray output_names, PackedInt32Array output_encodings);
+    uint64_t create_operator_comparison(uint64_t pipeline_handle, int32_t comparison);
+    uint64_t create_operator_nms(uint64_t pipeline_handle, float threshold);
+    uint64_t create_operator_sort_matrix(uint64_t pipeline_handle, int32_t sort_type);
+    uint64_t create_operator_render_text(uint64_t pipeline_handle, int32_t typeface, String language_and_locale, int32_t width, int32_t height);
+    uint64_t create_operator_uv_to_3d(uint64_t pipeline_handle);
 
     // Tensors
     uint64_t create_pipeline_tensor_shape(uint64_t pipeline_handle, PackedInt32Array dimensions, int32_t data_type, int32_t channels, int32_t tensor_type, bool placeholder);

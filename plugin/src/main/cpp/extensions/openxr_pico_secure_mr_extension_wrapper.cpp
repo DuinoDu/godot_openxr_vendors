@@ -67,6 +67,11 @@ void OpenXRPicoSecureMRExtensionWrapper::_bind_methods() {
     ClassDB::bind_method(D_METHOD("create_operator_convert_color", "pipeline_handle", "convert_code"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_convert_color);
     ClassDB::bind_method(D_METHOD("create_operator_normalize", "pipeline_handle", "normalize_type"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_normalize);
     ClassDB::bind_method(D_METHOD("create_operator_model", "pipeline_handle", "model_data", "model_name", "input_name", "output_names", "output_encodings"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_model);
+    ClassDB::bind_method(D_METHOD("create_operator_comparison", "pipeline_handle", "comparison"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_comparison);
+    ClassDB::bind_method(D_METHOD("create_operator_nms", "pipeline_handle", "threshold"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_nms);
+    ClassDB::bind_method(D_METHOD("create_operator_sort_matrix", "pipeline_handle", "sort_type"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_sort_matrix);
+    ClassDB::bind_method(D_METHOD("create_operator_render_text", "pipeline_handle", "typeface", "language_and_locale", "width", "height"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_render_text);
+    ClassDB::bind_method(D_METHOD("create_operator_uv_to_3d", "pipeline_handle"), &OpenXRPicoSecureMRExtensionWrapper::create_operator_uv_to_3d);
 
     ClassDB::bind_method(D_METHOD("create_pipeline_tensor_shape", "pipeline_handle", "dimensions", "data_type", "channels", "tensor_type", "placeholder"), &OpenXRPicoSecureMRExtensionWrapper::create_pipeline_tensor_shape);
     ClassDB::bind_method(D_METHOD("create_global_tensor_shape", "framework_handle", "dimensions", "data_type", "channels", "tensor_type", "placeholder"), &OpenXRPicoSecureMRExtensionWrapper::create_global_tensor_shape);
@@ -253,6 +258,74 @@ uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_model(uint64_t pipe
     XrSecureMrOperatorPICO op = XR_NULL_HANDLE;
     XrResult res = xrCreateSecureMrOperatorPICO(pipeline, &create_info, &op);
     ERR_FAIL_COND_V_MSG(XR_FAILED(res), 0, "xrCreateSecureMrOperatorPICO (model) failed");
+    return (uint64_t)op;
+}
+
+uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_comparison(uint64_t pipeline_handle, int32_t comparison) {
+    XrSecureMrPipelinePICO pipeline = (XrSecureMrPipelinePICO)pipeline_handle;
+    XrSecureMrOperatorComparisonPICO header = {};
+    header.type = XR_TYPE_SECURE_MR_OPERATOR_COMPARISON_PICO;
+    header.next = nullptr;
+    header.comparison = (XrSecureMrComparisonPICO)comparison;
+    XrSecureMrOperatorCreateInfoPICO create_info = { XR_TYPE_SECURE_MR_OPERATOR_CREATE_INFO_PICO, nullptr, (XrSecureMrOperatorBaseHeaderPICO *)&header, XR_SECURE_MR_OPERATOR_TYPE_CUSTOMIZED_COMPARE_PICO };
+    XrSecureMrOperatorPICO op = XR_NULL_HANDLE;
+    XrResult res = xrCreateSecureMrOperatorPICO(pipeline, &create_info, &op);
+    ERR_FAIL_COND_V_MSG(XR_FAILED(res), 0, "xrCreateSecureMrOperatorPICO (comparison) failed");
+    return (uint64_t)op;
+}
+
+uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_nms(uint64_t pipeline_handle, float threshold) {
+    XrSecureMrPipelinePICO pipeline = (XrSecureMrPipelinePICO)pipeline_handle;
+    XrSecureMrOperatorNonMaximumSuppressionPICO header = {};
+    header.type = XR_TYPE_SECURE_MR_OPERATOR_NON_MAXIMUM_SUPPRESSION_PICO;
+    header.next = nullptr;
+    header.threshold = threshold;
+    XrSecureMrOperatorCreateInfoPICO create_info = { XR_TYPE_SECURE_MR_OPERATOR_CREATE_INFO_PICO, nullptr, (XrSecureMrOperatorBaseHeaderPICO *)&header, XR_SECURE_MR_OPERATOR_TYPE_NMS_PICO };
+    XrSecureMrOperatorPICO op = XR_NULL_HANDLE;
+    XrResult res = xrCreateSecureMrOperatorPICO(pipeline, &create_info, &op);
+    ERR_FAIL_COND_V_MSG(XR_FAILED(res), 0, "xrCreateSecureMrOperatorPICO (NMS) failed");
+    return (uint64_t)op;
+}
+
+uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_sort_matrix(uint64_t pipeline_handle, int32_t sort_type) {
+    XrSecureMrPipelinePICO pipeline = (XrSecureMrPipelinePICO)pipeline_handle;
+    XrSecureMrOperatorSortMatrixPICO header = {};
+    header.type = XR_TYPE_SECURE_MR_OPERATOR_SORT_MATRIX_PICO;
+    header.next = nullptr;
+    header.sortType = (XrSecureMrMatrixSortTypePICO)sort_type;
+    XrSecureMrOperatorCreateInfoPICO create_info = { XR_TYPE_SECURE_MR_OPERATOR_CREATE_INFO_PICO, nullptr, (XrSecureMrOperatorBaseHeaderPICO *)&header, XR_SECURE_MR_OPERATOR_TYPE_SORT_MAT_PICO };
+    XrSecureMrOperatorPICO op = XR_NULL_HANDLE;
+    XrResult res = xrCreateSecureMrOperatorPICO(pipeline, &create_info, &op);
+    ERR_FAIL_COND_V_MSG(XR_FAILED(res), 0, "xrCreateSecureMrOperatorPICO (SORT_MAT) failed");
+    return (uint64_t)op;
+}
+
+uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_render_text(uint64_t pipeline_handle, int32_t typeface, String language_and_locale, int32_t width, int32_t height) {
+    XrSecureMrPipelinePICO pipeline = (XrSecureMrPipelinePICO)pipeline_handle;
+    CharString lang = language_and_locale.utf8();
+    XrSecureMrOperatorRenderTextPICO header = {};
+    header.type = XR_TYPE_SECURE_MR_OPERATOR_RENDER_TEXT_PICO;
+    header.next = nullptr;
+    header.typeface = (XrSecureMrFontTypefacePICO)typeface;
+    header.languageAndLocale = lang.get_data();
+    header.width = width;
+    header.height = height;
+    XrSecureMrOperatorCreateInfoPICO create_info = { XR_TYPE_SECURE_MR_OPERATOR_CREATE_INFO_PICO, nullptr, (XrSecureMrOperatorBaseHeaderPICO *)&header, XR_SECURE_MR_OPERATOR_TYPE_RENDER_TEXT_PICO };
+    XrSecureMrOperatorPICO op = XR_NULL_HANDLE;
+    XrResult res = xrCreateSecureMrOperatorPICO(pipeline, &create_info, &op);
+    ERR_FAIL_COND_V_MSG(XR_FAILED(res), 0, "xrCreateSecureMrOperatorPICO (RENDER_TEXT) failed");
+    return (uint64_t)op;
+}
+
+uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_uv_to_3d(uint64_t pipeline_handle) {
+    XrSecureMrPipelinePICO pipeline = (XrSecureMrPipelinePICO)pipeline_handle;
+    XrSecureMrOperatorUVTo3DPICO header = {};
+    header.type = XR_TYPE_SECURE_MR_OPERATOR_UV_TO_3D_PICO;
+    header.next = nullptr;
+    XrSecureMrOperatorCreateInfoPICO create_info = { XR_TYPE_SECURE_MR_OPERATOR_CREATE_INFO_PICO, nullptr, (XrSecureMrOperatorBaseHeaderPICO *)&header, XR_SECURE_MR_OPERATOR_TYPE_UV_TO_3D_IN_CAM_SPACE_PICO };
+    XrSecureMrOperatorPICO op = XR_NULL_HANDLE;
+    XrResult res = xrCreateSecureMrOperatorPICO(pipeline, &create_info, &op);
+    ERR_FAIL_COND_V_MSG(XR_FAILED(res), 0, "xrCreateSecureMrOperatorPICO (UV_TO_3D) failed");
     return (uint64_t)op;
 }
 
