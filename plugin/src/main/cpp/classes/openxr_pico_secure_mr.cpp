@@ -31,6 +31,7 @@
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <godot_cpp/classes/file_access.hpp>
 
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 
@@ -376,7 +377,230 @@ void OpenXRPicoSecureMR::op_gltf_update(uint64_t pipeline_handle, int32_t attrib
     }
 }
 
+// Minimal string->enum mapping for common SecureMR operators used by the MNIST sample.
+static int _oxr_securemr_op_from_string(const String &s) {
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_UNKNOWN_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_UNKNOWN_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ARITHMETIC_COMPOSE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ARITHMETIC_COMPOSE_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_MIN_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_MIN_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_MAX_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_MAX_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_MULTIPLY_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_MULTIPLY_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_CUSTOMIZED_COMPARE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_CUSTOMIZED_COMPARE_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_OR_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_OR_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_AND_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ELEMENTWISE_AND_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ALL_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ALL_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ANY_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ANY_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_NMS_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_NMS_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_SOLVE_P_N_P_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_SOLVE_P_N_P_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_GET_AFFINE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_GET_AFFINE_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_APPLY_AFFINE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_APPLY_AFFINE_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_APPLY_AFFINE_POINT_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_APPLY_AFFINE_POINT_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_UV_TO_3D_IN_CAM_SPACE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_UV_TO_3D_IN_CAM_SPACE_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ASSIGNMENT_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ASSIGNMENT_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_RUN_MODEL_INFERENCE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_RUN_MODEL_INFERENCE_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_NORMALIZE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_NORMALIZE_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_CAMERA_SPACE_TO_WORLD_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_CAMERA_SPACE_TO_WORLD_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_RECTIFIED_VST_ACCESS_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_RECTIFIED_VST_ACCESS_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_ARGMAX_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_ARGMAX_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_CONVERT_COLOR_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_CONVERT_COLOR_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_SORT_VEC_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_SORT_VEC_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_INVERSION_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_INVERSION_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_GET_TRANSFORM_MAT_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_GET_TRANSFORM_MAT_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_SORT_MAT_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_SORT_MAT_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_SWITCH_GLTF_RENDER_STATUS_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_SWITCH_GLTF_RENDER_STATUS_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_UPDATE_GLTF_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_UPDATE_GLTF_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_RENDER_TEXT_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_RENDER_TEXT_PICO;
+    if (s == String("XR_SECURE_MR_OPERATOR_TYPE_LOAD_TEXTURE_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_LOAD_TEXTURE_PICO;
+    return -1;
+}
+
+Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, const Dictionary &spec, const String &assets_base_path) {
+    Dictionary out;
+    ERR_FAIL_NULL_V(wrapper, out);
+
+    uint64_t pipeline = create_pipeline(framework_handle);
+    out["pipeline"] = (uint64_t)pipeline;
+
+    Dictionary tensors_out;
+
+    // Tensors
+    if (spec.has("tensors") && spec["tensors"].get_type() == Variant::DICTIONARY) {
+        Dictionary tensors = spec["tensors"];
+        Array tnames = tensors.keys();
+        for (int i = 0; i < tnames.size(); i++) {
+            String tname = tnames[i];
+            Variant tv = tensors[tname];
+            if (tv.get_type() != Variant::DICTIONARY) continue;
+            Dictionary td = (Dictionary)tv;
+
+            // Dimensions
+            PackedInt32Array dims;
+            if (td.has("dimensions") && td["dimensions"].get_type() == Variant::ARRAY) {
+                Array da = td["dimensions"];
+                dims.resize(da.size());
+                for (int di = 0; di < da.size(); di++) dims.set(di, (int32_t)(int64_t)da[di]);
+            }
+
+            int32_t channels = td.has("channels") ? (int32_t)(int64_t)td["channels"] : 1;
+            int32_t data_type = td.has("data_type") ? (int32_t)(int64_t)td["data_type"] : 6; // float32 default
+            int32_t tensor_type = td.has("usage") ? (int32_t)(int64_t)td["usage"] : 6;    // mat default
+            bool placeholder = td.has("is_placeholder") ? (bool)td["is_placeholder"] : false;
+
+            uint64_t ph = create_pipeline_tensor_shape(pipeline, dims, data_type, channels, tensor_type, placeholder);
+            tensors_out[tname] = (uint64_t)ph;
+
+            // Optional initial value
+            if (td.has("value") && td["value"].get_type() == Variant::ARRAY) {
+                Array arr = td["value"];
+                if (data_type == 6) {
+                    PackedFloat32Array f;
+                    f.resize(arr.size());
+                    for (int vi = 0; vi < arr.size(); vi++) f.set(vi, (float)(double)arr[vi]);
+                    reset_pipeline_tensor_floats(pipeline, ph, f);
+                } else {
+                    PackedByteArray b;
+                    b.resize(arr.size());
+                    for (int vi = 0; vi < arr.size(); vi++) b.set(vi, (uint8_t)(int64_t)arr[vi]);
+                    reset_pipeline_tensor_bytes(pipeline, ph, b);
+                }
+            }
+        }
+    }
+
+    // Operators
+    if (spec.has("operators") && spec["operators"].get_type() == Variant::ARRAY) {
+        Array ops = spec["operators"];
+        for (int oi = 0; oi < ops.size(); oi++) {
+            if (ops[oi].get_type() != Variant::DICTIONARY) continue;
+            Dictionary od = ops[oi];
+            String type_str = od.has("type") ? (String)od["type"] : String();
+            int type = _oxr_securemr_op_from_string(type_str);
+            uint64_t oph = 0;
+
+            if (type == XR_SECURE_MR_OPERATOR_TYPE_ARITHMETIC_COMPOSE_PICO) {
+                String expr = od.has("expression") ? (String)od["expression"] : String();
+                oph = wrapper->create_operator_arithmetic_compose(pipeline, expr);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_CONVERT_COLOR_PICO) {
+                int32_t flag = od.has("flag") ? (int32_t)(int64_t)od["flag"] : 0;
+                oph = wrapper->create_operator_convert_color(pipeline, flag);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_NORMALIZE_PICO) {
+                int32_t normalize_type = od.has("normalize_type") ? (int32_t)(int64_t)od["normalize_type"] : 0;
+                oph = wrapper->create_operator_normalize(pipeline, normalize_type);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_RUN_MODEL_INFERENCE_PICO) {
+                String model_asset = od.has("model_asset") ? (String)od["model_asset"] : String();
+                String model_name = od.has("model_name") ? (String)od["model_name"] : String("model");
+
+                PackedByteArray model_data;
+                if (model_asset.length() > 0) {
+                    String path = model_asset;
+                    if (assets_base_path.length() > 0 && !model_asset.begins_with("res://") && !model_asset.begins_with("user://")) {
+                        path = assets_base_path.path_join(model_asset);
+                    }
+                    if (FileAccess::file_exists(path)) {
+                        model_data = FileAccess::get_file_as_bytes(path);
+                    }
+                }
+
+                String input_name = "input";
+                if (od.has("inputs") && od["inputs"].get_type() == Variant::ARRAY) {
+                    Array ia = od["inputs"];
+                    if (ia.size() > 0 && ia[0].get_type() == Variant::DICTIONARY) {
+                        Dictionary iid = ia[0];
+                        if (iid.has("name")) input_name = (String)iid["name"];
+                    }
+                }
+                PackedStringArray out_names;
+                if (od.has("outputs") && od["outputs"].get_type() == Variant::ARRAY) {
+                    Array oa = od["outputs"];
+                    for (int i = 0; i < oa.size(); i++) {
+                        if (oa[i].get_type() == Variant::DICTIONARY) {
+                            Dictionary ood = oa[i];
+                            if (ood.has("name")) out_names.push_back((String)ood["name"]);
+                        }
+                    }
+                }
+                PackedInt32Array out_enc;
+                out_enc.resize(out_names.size());
+                for (int i = 0; i < out_names.size(); i++) out_enc.set(i, XR_SECURE_MR_MODEL_ENCODING_FLOAT_32_PICO);
+
+                oph = wrapper->create_operator_model(pipeline, model_data, model_name, input_name, out_names, out_enc);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_NMS_PICO) {
+                float threshold = od.has("threshold") ? (float)(double)od["threshold"] : 0.5f;
+                oph = wrapper->create_operator_nms(pipeline, threshold);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_CUSTOMIZED_COMPARE_PICO) {
+                int32_t cmp = od.has("comparison") ? (int32_t)(int64_t)od["comparison"] : 0;
+                oph = wrapper->create_operator_comparison(pipeline, cmp);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_SORT_MAT_PICO) {
+                int32_t sort_type = od.has("sort_type") ? (int32_t)(int64_t)od["sort_type"] : 0;
+                oph = wrapper->create_operator_sort_matrix(pipeline, sort_type);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_RENDER_TEXT_PICO) {
+                int32_t typeface = od.has("typeface") ? (int32_t)(int64_t)od["typeface"] : 0;
+                String lang = od.has("language_and_locale") ? (String)od["language_and_locale"] : (od.has("language") ? (String)od["language"] : String("en-US"));
+                int32_t width = od.has("width") ? (int32_t)(int64_t)od["width"] : 256;
+                int32_t height = od.has("height") ? (int32_t)(int64_t)od["height"] : 256;
+                oph = wrapper->create_operator_render_text(pipeline, typeface, lang, width, height);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_UPDATE_GLTF_PICO) {
+                int32_t attribute = od.has("attribute") ? (int32_t)(int64_t)od["attribute"] : 0;
+                oph = wrapper->create_operator_update_gltf(pipeline, attribute);
+            } else if (type == XR_SECURE_MR_OPERATOR_TYPE_UV_TO_3D_IN_CAM_SPACE_PICO) {
+                oph = wrapper->create_operator_uv_to_3d(pipeline);
+            } else {
+                if (type < 0) {
+                    UtilityFunctions::push_error(String("Unknown SecureMR operator type: ") + type_str);
+                    continue;
+                }
+                oph = wrapper->create_operator_basic(pipeline, type);
+            }
+
+            // Inputs wiring
+            if (od.has("inputs") && od["inputs"].get_type() == Variant::ARRAY) {
+                Array ia = od["inputs"];
+                for (int i = 0; i < ia.size(); i++) {
+                    if (ia[i].get_type() == Variant::STRING) {
+                        String tname = ia[i];
+                        if (tensors_out.has(tname)) wrapper->set_operator_input_by_index(pipeline, oph, (uint64_t)tensors_out[tname], i);
+                    } else if (ia[i].get_type() == Variant::DICTIONARY) {
+                        Dictionary id = ia[i];
+                        String tname = id.has("tensor") ? (String)id["tensor"] : String();
+                        String in_name = id.has("name") ? (String)id["name"] : String();
+                        if (tname.length() > 0 && tensors_out.has(tname)) {
+                            if (in_name.length() > 0) wrapper->set_operator_input_by_name(pipeline, oph, (uint64_t)tensors_out[tname], in_name);
+                            else wrapper->set_operator_input_by_index(pipeline, oph, (uint64_t)tensors_out[tname], i);
+                        }
+                    }
+                }
+            }
+
+            // Outputs wiring
+            if (od.has("outputs") && od["outputs"].get_type() == Variant::ARRAY) {
+                Array oa = od["outputs"];
+                for (int i = 0; i < oa.size(); i++) {
+                    if (oa[i].get_type() == Variant::STRING) {
+                        String tname = oa[i];
+                        if (tensors_out.has(tname)) wrapper->set_operator_output_by_index(pipeline, oph, (uint64_t)tensors_out[tname], i);
+                    } else if (oa[i].get_type() == Variant::DICTIONARY) {
+                        Dictionary od2 = oa[i];
+                        String tname = od2.has("tensor") ? (String)od2["tensor"] : String();
+                        String out_name = od2.has("name") ? (String)od2["name"] : String();
+                        if (tname.length() > 0 && tensors_out.has(tname)) {
+                            if (out_name.length() > 0) wrapper->set_operator_output_by_name(pipeline, oph, (uint64_t)tensors_out[tname], out_name);
+                            else wrapper->set_operator_output_by_index(pipeline, oph, (uint64_t)tensors_out[tname], i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    out["tensors"] = tensors_out;
+    if (spec.has("inputs")) out["inputs"] = spec["inputs"];
+    if (spec.has("outputs")) out["outputs"] = spec["outputs"];
+    return out;
+}
+
 void OpenXRPicoSecureMR::_bind_methods() {
+    // Static singleton accessor for GDScript (ClassName.get_singleton()).
+    ClassDB::bind_static_method("OpenXRPicoSecureMR", D_METHOD("get_singleton"), &OpenXRPicoSecureMR::get_singleton);
+
     ClassDB::bind_method(D_METHOD("is_supported"), &OpenXRPicoSecureMR::is_supported);
 
     ClassDB::bind_method(D_METHOD("create_framework", "image_width", "image_height"), &OpenXRPicoSecureMR::create_framework);
@@ -433,4 +657,7 @@ void OpenXRPicoSecureMR::_bind_methods() {
     ClassDB::bind_method(D_METHOD("op_gltf_new_texture", "pipeline_handle", "gltf_placeholder_tensor", "image_tensor", "texture_id_tensor"), &OpenXRPicoSecureMR::op_gltf_new_texture);
     ClassDB::bind_method(D_METHOD("op_gltf_switch_render", "pipeline_handle", "gltf_placeholder_tensor", "pose_tensor", "view_locked_tensor", "visible_tensor"), &OpenXRPicoSecureMR::op_gltf_switch_render);
     ClassDB::bind_method(D_METHOD("op_gltf_update", "pipeline_handle", "attribute", "gltf_placeholder_tensor", "operands_by_name"), &OpenXRPicoSecureMR::op_gltf_update);
+
+    // Deserialization
+    ClassDB::bind_method(D_METHOD("deserialize_pipeline", "framework_handle", "spec", "assets_base_path"), &OpenXRPicoSecureMR::deserialize_pipeline, DEFVAL(String("")));
 }

@@ -71,6 +71,13 @@ public:
     void reset_pipeline_tensor_bytes(uint64_t pipeline_handle, uint64_t tensor_handle, const PackedByteArray &data);
     void reset_pipeline_tensor_floats(uint64_t pipeline_handle, uint64_t tensor_handle, const PackedFloat32Array &data);
 
+    // Deserialize pipeline from a Godot Dictionary spec.
+    // Spec schema is inspired by SecureMR utils (tensors/operators/inputs/outputs).
+    // Returns a Dictionary with keys:
+    // - "pipeline": uint64 handle
+    // - "tensors": Dictionary name -> uint64 pipeline tensor handle
+    Dictionary deserialize_pipeline(uint64_t framework_handle, const Dictionary &spec, const String &assets_base_path = "");
+
     // Generic operator helpers
     uint64_t create_operator_basic(uint64_t pipeline_handle, int32_t operator_type);
     uint64_t create_operator_arithmetic(uint64_t pipeline_handle, const String &config_text);

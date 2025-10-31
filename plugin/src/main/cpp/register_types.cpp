@@ -281,8 +281,15 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 				_register_extension_with_openxr(OpenXRHtcPassthroughExtensionWrapper::get_singleton());
 			}
 
-			if (_get_bool_project_setting("xr/openxr/extensions/pico/secure_mixed_reality")) {
-				_register_extension_with_openxr(OpenXRPicoSecureMRExtensionWrapper::get_singleton());
+			// Pico SecureMR: accept both legacy and namespaced keys for convenience.
+			{
+				bool pico_securemr = _get_bool_project_setting("xr/openxr/extensions/pico/secure_mixed_reality");
+				if (!pico_securemr && ProjectSettings::get_singleton()->has_setting("openxr/extensions/pico/secure_mixed_reality")) {
+					pico_securemr = (bool)ProjectSettings::get_singleton()->get_setting_with_override("openxr/extensions/pico/secure_mixed_reality");
+				}
+				if (pico_securemr) {
+					_register_extension_with_openxr(OpenXRPicoSecureMRExtensionWrapper::get_singleton());
+				}
 			}
 
 			// Only works with Godot 4.5 or later.
