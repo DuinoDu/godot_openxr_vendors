@@ -11,6 +11,10 @@ apply from: "../scripts/publish-module.gradle"
 
 def khronosOpenxrLoaderAarDir = file("${buildDir}/temp/khronos_openxr_loader_aar")
 def khronosOpenxrLoaderTargetDir = file("${buildDir}/temp/khronos_openxr_sdk")
+// Pico OpenXR loader source (local file)
+def picoOpenxrLoaderSource = file("${rootProject.projectDir}/thirdparty/openxr_pico/lib/libopenxr_loader.so")
+// Build parameter to choose which OpenXR loader to use
+def usePicoOpenxrLoader = project.hasProperty("usePicoOpenxrLoader") ? project.property("usePicoOpenxrLoader").toString().toBoolean() : false
 
 task extractKhronosOpenxrLoader {
     def khronosOpenxrLoader = configurations.detachedConfiguration(dependencies.create("org.khronos.openxr:openxr_loader_for_android:$versions.openxrVersion"))
@@ -40,6 +44,20 @@ task copyKhronosOpenxrLoader(dependsOn: extractKhronosOpenxrLoader) {
         copy {
             from "${khronosOpenxrLoaderAarDir}/prefab/modules/openxr_loader/libs/android.x86_64/libopenxr_loader.so"
             into khronosOpenxrLoaderTargetDirX86_64
+        }
+    }
+}
+
+// Copies Pico's OpenXR loader into the same target directory structure used above
+task copyPicoOpenxrLoader {
+    def picoOpenxrLoaderTargetDirArm64 = file("${khronosOpenxrLoaderTargetDir}/arm64-v8a/arm64-v8a")
+
+    doLast {
+        picoOpenxrLoaderTargetDirArm64.mkdirs()
+
+        copy {
+            from picoOpenxrLoaderSource
+            into picoOpenxrLoaderTargetDirArm64
         }
     }
 }
@@ -250,8 +268,13 @@ task copyGdExtensionConfigToAssets(type: Copy) {
 
 preBuild.dependsOn(copyGdExtensionConfigToAssets)
 assemble.dependsOn(copyGdExtensionConfigToAssets)
-preBuild.dependsOn(copyKhronosOpenxrLoader)
-assemble.dependsOn(copyKhronosOpenxrLoader)
+if (usePicoOpenxrLoader) {
+    preBuild.dependsOn(copyPicoOpenxrLoader)
+    assemble.dependsOn(copyPicoOpenxrLoader)
+} else {
+    preBuild.dependsOn(copyKhronosOpenxrLoader)
+    assemble.dependsOn(copyKhronosOpenxrLoader)
+}
 assemble.finalizedBy(copyDebugAARToAddons)
 assemble.finalizedBy(copyReleaseAARToAddons)
 clean.dependsOn(cleanAssets)

@@ -185,8 +185,12 @@ String PicoEditorExportPlugin::_get_android_manifest_application_element_content
 	}
 
 	// SecureMR
-	if (_get_bool_option("pico_xr_features/secure_mr")) {
-		contents += "        <meta-data tools:node=\"replace\" android:name=\"pvr.app.secure_mr\" android:value=\"1\" />\n";
+	if ((bool)project_settings->get_setting_with_override("xr/openxr/extensions/pico/secure_mixed_reality")) {
+
+		int secure_mr = _get_bool_option("pico_xr_features/secure_mr");
+		if (secure_mr) {
+		  contents += "        <meta-data tools:node=\"replace\" android:name=\"pvr.app.secure_mr\" android:value=\"1\" />\n";
+		}
 	}
 
 	return contents;

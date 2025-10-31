@@ -20,18 +20,12 @@ func _on_openxr_session_begun():
 	_initialized = true
 	
 	print("[MNIST] OpenXR session begun.")
-	var setting_key := "xr/openxr/extensions/pico/secure_mixed_reality"
-	if ProjectSettings.has_setting(setting_key):
-		print("[MNIST] Project setting '", setting_key, "' = ", ProjectSettings.get_setting(setting_key))
-	else:
-		print("[MNIST] Project setting '", setting_key, "' is missing")
-
 	print("[MNIST] Has OpenXRPicoSecureMRExtensionWrapper singleton: ", Engine.has_singleton("OpenXRPicoSecureMRExtensionWrapper"))
 	if Engine.has_singleton("OpenXRPicoSecureMRExtensionWrapper"):
 		var ext = Engine.get_singleton("OpenXRPicoSecureMRExtensionWrapper")
 		if ext and ext.has_method("is_secure_mr_supported"):
 			print("[MNIST] Runtime reports SecureMR supported: ", ext.is_secure_mr_supported())
-
+	
 	var securemr = OpenXRPicoSecureMR.get_singleton()
 	if securemr == null:
 		print("[MNIST] OpenXRPicoSecureMR is null")

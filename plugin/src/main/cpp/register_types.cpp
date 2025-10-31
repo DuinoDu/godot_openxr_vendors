@@ -108,6 +108,12 @@ static Vector<OpenXRExtensionWrapperExtension *> extensions_registered;
 static Vector<ExtensionSingleton> extensions_singletons;
 
 static inline void _register_extension_with_openxr(OpenXRExtensionWrapperExtension *p_extension) {
+	if (p_extension == nullptr) {
+		UtilityFunctions::printerr("[GodotOpenXR] Attempted to register a null extension wrapper.");
+		return;
+	}
+	String class_name = p_extension->get_class();
+	UtilityFunctions::print("[GodotOpenXR] Registering extension wrapper: ", class_name);
 	p_extension->register_extension_wrapper();
 	extensions_registered.push_back(p_extension);
 }
@@ -281,12 +287,9 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 				_register_extension_with_openxr(OpenXRHtcPassthroughExtensionWrapper::get_singleton());
 			}
 
-			// Pico SecureMR: accept both legacy and namespaced keys for convenience.
+			// Pico SecureMR
 			{
 				bool pico_securemr = _get_bool_project_setting("xr/openxr/extensions/pico/secure_mixed_reality");
-				if (!pico_securemr && ProjectSettings::get_singleton()->has_setting("openxr/extensions/pico/secure_mixed_reality")) {
-					pico_securemr = (bool)ProjectSettings::get_singleton()->get_setting_with_override("openxr/extensions/pico/secure_mixed_reality");
-				}
 				if (pico_securemr) {
 					_register_extension_with_openxr(OpenXRPicoSecureMRExtensionWrapper::get_singleton());
 				}

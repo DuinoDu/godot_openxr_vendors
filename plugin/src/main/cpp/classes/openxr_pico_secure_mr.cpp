@@ -57,7 +57,9 @@ OpenXRPicoSecureMR::~OpenXRPicoSecureMR() {
 }
 
 bool OpenXRPicoSecureMR::is_supported() const {
-    return wrapper && wrapper->is_secure_mr_supported();
+    const bool has_wrapper = wrapper != nullptr;
+    const bool ext_supported = has_wrapper ? wrapper->is_secure_mr_supported() : false;
+    return has_wrapper && ext_supported;
 }
 
 uint64_t OpenXRPicoSecureMR::create_framework(int32_t image_width, int32_t image_height) {

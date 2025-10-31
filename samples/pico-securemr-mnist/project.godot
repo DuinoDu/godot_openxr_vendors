@@ -22,4 +22,4 @@ textures/vram_compression/import_etc2_astc=true
 [xr]
 
 openxr/enabled=true
-xr/openxr/extensions/pico/secure_mixed_reality=true
+openxr/extensions/pico/secure_mixed_reality=true

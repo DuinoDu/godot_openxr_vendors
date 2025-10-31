@@ -30,6 +30,7 @@
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 
 #include <godot_cpp/classes/open_xrapi_extension.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 using namespace godot;
 
@@ -46,6 +47,8 @@ OpenXRPicoSecureMRExtensionWrapper::OpenXRPicoSecureMRExtensionWrapper() {
     ERR_FAIL_COND_MSG(singleton != nullptr, "An OpenXRPicoSecureMRExtensionWrapper singleton already exists.");
 
     request_extensions[XR_PICO_SECURE_MIXED_REALITY_EXTENSION_NAME] = &pico_secure_mr_ext;
+
+    UtilityFunctions::print("[PicoSecureMR] Wrapper constructed. Requesting extension: ", XR_PICO_SECURE_MIXED_REALITY_EXTENSION_NAME);
 
     singleton = this;
 }
@@ -94,14 +97,18 @@ godot::Dictionary OpenXRPicoSecureMRExtensionWrapper::_get_requested_extensions(
         godot::String key = ext.first;
         uint64_t value = reinterpret_cast<uint64_t>(ext.second);
         result[key] = (godot::Variant)value;
+        UtilityFunctions::print("[PicoSecureMR] _get_requested_extensions: ", key, " => ptr(", value, ")");
     }
 
+    UtilityFunctions::print("[PicoSecureMR] Provided ", result.size(), " requested extension(s) to OpenXR.");
     return result;
 }
 
 void OpenXRPicoSecureMRExtensionWrapper::_on_instance_created(uint64_t p_instance) {
     xr_instance = (XrInstance)p_instance;
+
     if (pico_secure_mr_ext) {
+        UtilityFunctions::print("[PicoSecureMR] OpenXR instance created. SecureMR extension ENABLED by runtime.");
         // Load all function pointers we need. If any are missing, these macros will early-return.
         GDEXTENSION_INIT_XR_FUNC(xrCreateSecureMrFrameworkPICO);
         GDEXTENSION_INIT_XR_FUNC(xrDestroySecureMrFrameworkPICO);
@@ -118,19 +125,25 @@ void OpenXRPicoSecureMRExtensionWrapper::_on_instance_created(uint64_t p_instanc
         GDEXTENSION_INIT_XR_FUNC(xrExecuteSecureMrPipelinePICO);
         GDEXTENSION_INIT_XR_FUNC(xrSetSecureMrOperatorResultByNamePICO);
         GDEXTENSION_INIT_XR_FUNC(xrSetSecureMrOperatorResultByIndexPICO);
+        UtilityFunctions::print("[PicoSecureMR] Function pointers initialized.");
+    } else {
+        UtilityFunctions::print("[PicoSecureMR] OpenXR instance created. SecureMR extension NOT enabled by runtime.");
     }
 }
 
 void OpenXRPicoSecureMRExtensionWrapper::_on_instance_destroyed() {
     xr_instance = XR_NULL_HANDLE;
+    UtilityFunctions::print("[PicoSecureMR] OpenXR instance destroyed.");
 }
 
 void OpenXRPicoSecureMRExtensionWrapper::_on_session_created(uint64_t p_session) {
     xr_session = (XrSession)p_session;
+    UtilityFunctions::print("[PicoSecureMR] OpenXR session created.");
 }
 
 void OpenXRPicoSecureMRExtensionWrapper::_on_session_destroyed() {
     xr_session = XR_NULL_HANDLE;
+    UtilityFunctions::print("[PicoSecureMR] OpenXR session destroyed.");
 }
 
 uint64_t OpenXRPicoSecureMRExtensionWrapper::create_framework(int32_t image_width, int32_t image_height) {
