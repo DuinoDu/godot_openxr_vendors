@@ -415,6 +415,24 @@ static int _oxr_securemr_op_from_string(const String &s) {
     return -1;
 }
 
+static int32_t _oxr_securemr_encoding_from_data_type(int32_t data_type) {
+    switch (data_type) {
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT8_PICO:
+            return XR_SECURE_MR_MODEL_ENCODING_UFIXED_POINT8_PICO;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT8_PICO:
+            return XR_SECURE_MR_MODEL_ENCODING_SFIXED_POINT8_PICO;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT16_PICO:
+            return XR_SECURE_MR_MODEL_ENCODING_UFIXED_POINT16_PICO;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT32_PICO:
+            return XR_SECURE_MR_MODEL_ENCODING_INT32_PICO;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT32_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT64_PICO:
+            return XR_SECURE_MR_MODEL_ENCODING_FLOAT_32_PICO;
+        default:
+            return XR_SECURE_MR_MODEL_ENCODING_FLOAT_32_PICO;
+    }
+}
+
 Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, const Dictionary &spec, const String &assets_base_path) {
     Dictionary out;
     ERR_FAIL_NULL_V(wrapper, out);
@@ -423,6 +441,7 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
     out["pipeline"] = (uint64_t)pipeline;
 
     Dictionary tensors_out;
+    Dictionary tensor_data_types;
 
     // Tensors
     if (spec.has("tensors") && spec["tensors"].get_type() == Variant::DICTIONARY) {
@@ -449,6 +468,7 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
 
             uint64_t ph = create_pipeline_tensor_shape(pipeline, dims, data_type, channels, tensor_type, placeholder);
             tensors_out[tname] = (uint64_t)ph;
+            tensor_data_types[tname] = data_type;
 
             // Optional initial value
             if (td.has("value") && td["value"].get_type() == Variant::ARRAY) {
@@ -491,15 +511,23 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
                 String model_asset = od.has("model_asset") ? (String)od["model_asset"] : String();
                 String model_name = od.has("model_name") ? (String)od["model_name"] : String("model");
 
+                String resolved_model_path = model_asset;
                 PackedByteArray model_data;
                 if (model_asset.length() > 0) {
                     String path = model_asset;
                     if (assets_base_path.length() > 0 && !model_asset.begins_with("res://") && !model_asset.begins_with("user://")) {
                         path = assets_base_path.path_join(model_asset);
                     }
+                    resolved_model_path = path;
                     if (FileAccess::file_exists(path)) {
                         model_data = FileAccess::get_file_as_bytes(path);
+                    } else {
+                        UtilityFunctions::push_error(vformat("[PicoSecureMR] Model asset '%s' not found.", path));
                     }
+                }
+                if (model_data.is_empty()) {
+                    UtilityFunctions::push_error(vformat("[PicoSecureMR] Model asset '%s' could not be loaded or is empty.", resolved_model_path));
+                    continue;
                 }
 
                 String input_name = "input";
@@ -511,18 +539,34 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
                     }
                 }
                 PackedStringArray out_names;
+                PackedInt32Array out_enc;
                 if (od.has("outputs") && od["outputs"].get_type() == Variant::ARRAY) {
                     Array oa = od["outputs"];
                     for (int i = 0; i < oa.size(); i++) {
-                        if (oa[i].get_type() == Variant::DICTIONARY) {
-                            Dictionary ood = oa[i];
-                            if (ood.has("name")) out_names.push_back((String)ood["name"]);
+                        if (oa[i].get_type() != Variant::DICTIONARY) {
+                            continue;
                         }
+                        Dictionary ood = oa[i];
+                        if (!ood.has("name")) {
+                            continue;
+                        }
+                        String output_name = (String)ood["name"];
+                        out_names.push_back(output_name);
+
+                        int32_t encoding = XR_SECURE_MR_MODEL_ENCODING_FLOAT_32_PICO;
+                        if (ood.has("encoding")) {
+                            encoding = (int32_t)(int64_t)ood["encoding"];
+                        } else if (ood.has("tensor")) {
+                            String tensor_name = (String)ood["tensor"];
+                            if (tensor_data_types.has(tensor_name)) {
+                                encoding = _oxr_securemr_encoding_from_data_type((int32_t)(int64_t)tensor_data_types[tensor_name]);
+                            }
+                        }
+                        int new_index = out_enc.size();
+                        out_enc.resize(new_index + 1);
+                        out_enc.set(new_index, encoding);
                     }
                 }
-                PackedInt32Array out_enc;
-                out_enc.resize(out_names.size());
-                for (int i = 0; i < out_names.size(); i++) out_enc.set(i, XR_SECURE_MR_MODEL_ENCODING_FLOAT_32_PICO);
 
                 oph = wrapper->create_operator_model(pipeline, model_data, model_name, input_name, out_names, out_enc);
             } else if (type == XR_SECURE_MR_OPERATOR_TYPE_NMS_PICO) {

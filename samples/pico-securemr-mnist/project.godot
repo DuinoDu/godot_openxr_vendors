@@ -23,3 +23,5 @@ textures/vram_compression/import_etc2_astc=true
 
 openxr/enabled=true
 openxr/extensions/pico/secure_mixed_reality=true
+openxr/extensions/meta/passthrough=true
+openxr/extensions/pico/readback_tensor=true

@@ -80,6 +80,7 @@
 #include "extensions/openxr_meta_simultaneous_hands_and_controllers_extension_wrapper.h"
 #include "extensions/openxr_meta_spatial_entity_mesh_extension_wrapper.h"
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
+#include "extensions/openxr_pico_readback_tensor_extension_wrapper.h"
 #include "classes/openxr_pico_secure_mr.h"
 
 #include "classes/openxr_fb_hand_tracking_mesh.h"
@@ -181,6 +182,7 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			GDREGISTER_CLASS(OpenXRHtcFacialTrackingExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRHtcPassthroughExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRPicoSecureMRExtensionWrapper);
+			GDREGISTER_CLASS(OpenXRPicoReadbackTensorExtensionWrapper);
             GDREGISTER_CLASS(OpenXRPicoSecureMR);
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
@@ -295,6 +297,14 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 				}
 			}
 
+			// Pico Readback Tensor
+			{
+				bool pico_readback = _get_bool_project_setting("xr/openxr/extensions/pico/readback_tensor");
+				if (pico_readback) {
+					_register_extension_with_openxr(OpenXRPicoReadbackTensorExtensionWrapper::get_singleton());
+				}
+			}
+
 			// Only works with Godot 4.5 or later.
 			if (godot::internal::godot_version.minor >= 5) {
 				GDREGISTER_CLASS(OpenXRFbSpaceWarpExtensionWrapper);
@@ -329,6 +339,7 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			_register_extension_as_singleton(OpenXRMetaHeadsetIDExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRFbBodyTrackingExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRHtcFacialTrackingExtensionWrapper::get_singleton());
+			_register_extension_as_singleton(OpenXRPicoReadbackTensorExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRHtcPassthroughExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRPicoSecureMRExtensionWrapper::get_singleton());
 
@@ -484,6 +495,7 @@ void add_plugin_project_settings() {
 
 	// Pico
 	_add_bool_project_setting(project_settings, "xr/openxr/extensions/pico/secure_mixed_reality", false);
+	_add_bool_project_setting(project_settings, "xr/openxr/extensions/pico/readback_tensor", false);
 
 	// Only works with Godot 4.5 or later.
 	if (godot::internal::godot_version.minor >= 5) {

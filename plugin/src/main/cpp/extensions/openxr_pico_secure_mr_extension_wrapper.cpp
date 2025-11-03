@@ -270,7 +270,17 @@ uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_model(uint64_t pipe
     XrSecureMrOperatorCreateInfoPICO create_info = { XR_TYPE_SECURE_MR_OPERATOR_CREATE_INFO_PICO, nullptr, (XrSecureMrOperatorBaseHeaderPICO *)&model_info, XR_SECURE_MR_OPERATOR_TYPE_RUN_MODEL_INFERENCE_PICO };
     XrSecureMrOperatorPICO op = XR_NULL_HANDLE;
     XrResult res = xrCreateSecureMrOperatorPICO(pipeline, &create_info, &op);
-    ERR_FAIL_COND_V_MSG(XR_FAILED(res), 0, "xrCreateSecureMrOperatorPICO (model) failed");
+    if (XR_FAILED(res)) {
+        String err = vformat("xrCreateSecureMrOperatorPICO (model '%s') failed with result %d", model_name, (int32_t)res);
+        if (get_openxr_api().is_valid()) {
+            String err_str = get_openxr_api()->get_error_string(res);
+            if (!err_str.is_empty()) {
+                err = vformat("xrCreateSecureMrOperatorPICO (model '%s') failed with result %d (%s)", model_name, (int32_t)res, err_str);
+            }
+        }
+        UtilityFunctions::push_error(String("[PicoSecureMR] ") + err);
+        ERR_FAIL_V_MSG(0, err);
+    }
     return (uint64_t)op;
 }
 
