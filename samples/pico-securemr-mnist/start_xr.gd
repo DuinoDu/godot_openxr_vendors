@@ -17,7 +17,7 @@ func _ready():
 		vp.use_xr = true
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
-		if RenderingServer.get_rendering_device():
+		if not OS.has_feature("headless") and RenderingServer.get_rendering_device():
 			vp.vrs_mode = Viewport.VRS_XR
 
 		xr_interface.session_begun.connect(_on_openxr_session_begun)

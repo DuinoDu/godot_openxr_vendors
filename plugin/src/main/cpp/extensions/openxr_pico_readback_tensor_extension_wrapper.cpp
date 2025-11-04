@@ -32,6 +32,8 @@
 #include <godot_cpp/classes/open_xrapi_extension.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/array.hpp>
+#include <godot_cpp/classes/os.hpp>
+#include <godot_cpp/classes/engine.hpp>
 
 #include <chrono>
 #include <thread>
@@ -127,6 +129,16 @@ void OpenXRPicoReadbackTensorExtensionWrapper::_on_instance_destroyed() {
 int32_t OpenXRPicoReadbackTensorExtensionWrapper::get_graphics_api() const { return (int32_t)_detect_graphics_api(); }
 
 OpenXRPicoReadbackTensorExtensionWrapper::GraphicsAPI OpenXRPicoReadbackTensorExtensionWrapper::_detect_graphics_api() const {
+    OS *os = OS::get_singleton();
+    if (os && os->has_feature("headless")) {
+        return GRAPHICS_API_UNKNOWN;
+    }
+
+    Engine *engine = Engine::get_singleton();
+    if (!engine || !engine->has_singleton("RenderingServer")) {
+        return GRAPHICS_API_UNKNOWN;
+    }
+
     RenderingServer *rs = RenderingServer::get_singleton();
     if (!rs) return GRAPHICS_API_UNKNOWN;
     String rendering_driver = rs->get_current_rendering_driver_name();
@@ -148,60 +160,31 @@ PackedByteArray OpenXRPicoReadbackTensorExtensionWrapper::readback_global_tensor
     XrFutureEXT future = 0;
     XrResult r = xrCreateBufferFromGlobalTensorAsyncPICO(tensor, &future);
     if (XR_FAILED(r)) {
-        UtilityFunctions::printerr("[PicoReadback] xrCreateBufferFromGlobalTensorAsyncPICO failed: ", (int)r);
+        UtilityFunctions::printerr("[PicoReadback] xrCreateBufferFromGlobalTensorAsyncPICO failed, ret=", (int)r);
         return out;
     }
 
+    XrCreateBufferFromGlobalTensorCompletionPICO completion;
     XrReadbackTensorBufferPICO buf = {};
     buf.bufferCapacityInput = 0;
-    buf.bufferSizeOutput = 0;
-    buf.buffer = nullptr;
-    XrCreateBufferFromGlobalTensorCompletionPICO completion = {};
-    completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
-    completion.next = nullptr;
-    completion.futureResult = XR_SUCCESS;
     completion.tensorBuffer = &buf;
 
-    auto complete_tensor = [&](const char *label) -> bool {
-        completion.futureResult = XR_SUCCESS;
-        XrResult cr = xrCreateBufferFromGlobalTensorCompletePICO(tensor, future, &completion);
-        if (cr == XR_ERROR_FUTURE_PENDING_EXT) {
-            _wait_for_future_ready(future);
-            completion.futureResult = XR_SUCCESS;
-            cr = xrCreateBufferFromGlobalTensorCompletePICO(tensor, future, &completion);
-            if (cr == XR_ERROR_FUTURE_PENDING_EXT) {
-                UtilityFunctions::printerr("[PicoReadback] Future still pending during ", label, ". Run the producing pipeline before requesting readback.");
-                return false;
-            }
-        }
-        if (cr != XR_SUCCESS) {
-            UtilityFunctions::printerr("[PicoReadback] Complete (", label, ") failed: ", (int)cr);
-            return false;
-        }
-        if (completion.futureResult != XR_SUCCESS) {
-            UtilityFunctions::printerr("[PicoReadback] Future result for ", label, " is not XR_SUCCESS: ", (int)completion.futureResult);
-            return false;
-        }
-        return true;
-    };
-
-    if (!complete_tensor("size query")) {
-        return out;
+    XrResult ret = xrCreateBufferFromGlobalTensorCompletePICO(tensor, future, &completion); 
+    if (ret == XR_SUCCESS) {
+      completion.tensorBuffer->bufferCapacityInput = completion.tensorBuffer->bufferSizeOutput;
+      completion.tensorBuffer->buffer = new char[completion.tensorBuffer->bufferCapacityInput];
+      UtilityFunctions::print("[PicoReadback] 2, bufferCapacityInput: ", completion.tensorBuffer->bufferCapacityInput);
+      ret = xrCreateBufferFromGlobalTensorCompletePICO(tensor, future, &completion);
+      if (ret == XR_SUCCESS) {
+        out.resize(buf.bufferSizeOutput);
+        buf.bufferCapacityInput = buf.bufferSizeOutput;
+        buf.buffer = out.ptrw();
+      } else {
+        UtilityFunctions::print("[PicoReadback] xrCreateBufferFromGlobalTensorCompletePICO_2 failed, ret=", (int)ret);
+      }
+    } else {
+      UtilityFunctions::print("[PicoReadback] xrCreateBufferFromGlobalTensorCompletePICO_1 failed, ret=", (int)ret);
     }
-
-    if (buf.bufferSizeOutput == 0) {
-        UtilityFunctions::printerr("[PicoReadback] Output buffer size is zero");
-        return out;
-    }
-
-    out.resize(buf.bufferSizeOutput);
-    buf.bufferCapacityInput = buf.bufferSizeOutput;
-    buf.buffer = out.ptrw();
-    if (!complete_tensor("copy")) {
-        out.clear();
-        return out;
-    }
-
     return out;
 }
 

@@ -262,7 +262,8 @@ uint64_t OpenXRPicoSecureMRExtensionWrapper::create_operator_model(uint64_t pipe
     model_info.modelOutputCount = out_count;
     model_info.modelOutputs = outputs.ptrw();
     model_info.bufferSize = model_data.size();
-    model_info.buffer = (void *)model_data.ptrw();
+    const uint8_t *model_ptr = model_data.ptr();
+    model_info.buffer = const_cast<void *>(static_cast<const void *>(model_ptr));
     model_info.modelType = XR_SECURE_MR_MODEL_TYPE_QNN_CONTEXT_BINARY_PICO;
     CharString mname = model_name.utf8();
     model_info.modelName = mname.get_data();

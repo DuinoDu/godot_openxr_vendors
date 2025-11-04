@@ -40,7 +40,16 @@
 #include <openxr/openxr.h>
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 
+#include <condition_variable>
+#include <chrono>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+
 namespace godot {
+
+class OpenXRPicoReadbackTensorExtensionWrapper;
 
 // High-level helper for Pico SecureMR, mirroring SecureMR utils for Godot.
 class OpenXRPicoSecureMR : public Object {
@@ -144,16 +153,49 @@ public:
     // Update GLTF with attribute (texture/animation/pose/local transform/material). Attribute is XrSecureMrGltfOperatorAttributePICO value.
     void op_gltf_update(uint64_t pipeline_handle, int32_t attribute, uint64_t gltf_placeholder_tensor, const Dictionary &operands_by_name);
 
+    // Readback helpers
+    bool ensure_readback(uint64_t global_tensor_handle, int32_t interval_msec = 33);
+    void release_readback(uint64_t global_tensor_handle);
+    bool request_readback(uint64_t global_tensor_handle);
+    PackedByteArray pop_readback(uint64_t global_tensor_handle);
+
 protected:
     static void _bind_methods();
 
 private:
     static OpenXRPicoSecureMR *singleton;
     OpenXRPicoSecureMRExtensionWrapper *wrapper = nullptr;
+    OpenXRPicoReadbackTensorExtensionWrapper *readback_wrapper = nullptr;
+    Dictionary pipeline_model_buffers;
 
+    PackedByteArray _retain_pipeline_buffer(uint64_t pipeline_handle, const PackedByteArray &buffer);
+    void _release_pipeline_buffers(uint64_t pipeline_handle);
     void set_named_input(uint64_t pipeline_handle, uint64_t operator_handle, uint64_t tensor_handle, const char *name);
     void set_named_output(uint64_t pipeline_handle, uint64_t operator_handle, uint64_t tensor_handle, const char *name);
     void do_elementwise(uint64_t pipeline_handle, int32_t op_type, uint64_t a_tensor, uint64_t b_tensor, uint64_t result_tensor);
+
+    struct ReadbackJob {
+        uint64_t tensor_handle = 0;
+        OpenXRPicoReadbackTensorExtensionWrapper *wrapper = nullptr;
+        std::thread worker;
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool stop_requested = false;
+        bool request_pending = false;
+        bool busy = false;
+        bool data_ready = false;
+        PackedByteArray latest_data;
+        int interval_ms = 33;
+        std::chrono::steady_clock::time_point next_allowed_time = std::chrono::steady_clock::time_point();
+    };
+
+    std::mutex readback_jobs_mutex;
+    std::unordered_map<uint64_t, std::unique_ptr<ReadbackJob>> readback_jobs;
+
+    ReadbackJob *_ensure_readback_job_locked(uint64_t global_tensor_handle);
+    void _stop_all_readback_jobs();
+    void _update_readback_wrapper();
+    static void _readback_thread_proc(ReadbackJob *job);
 };
 
 } // namespace godot

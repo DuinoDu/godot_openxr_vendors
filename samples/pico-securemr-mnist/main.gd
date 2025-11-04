@@ -1,6 +1,12 @@
 extends Node3D
 
-const SUBMIT_INTERVAL_MS := 50
+const SUBMIT_INTERVAL_MS := 33
+const CAMERA_PERMISSION := "android.permission.CAMERA"
+const IMAGE_WIDTH := 512
+const IMAGE_HEIGHT := 512
+const IMAGE_CHANNELS := 3
+const TENSOR_DATA_TYPE_UINT8 := 1
+const TENSOR_TYPE_MAT := 6
 
 var _initialized := false
 var securemr = null
@@ -13,6 +19,11 @@ var _pipeline_bindings: Array = []
 var _pipeline_ready: bool = false
 var _last_submit_msec: int = 0
 var passthrough_enabled: bool = false
+var _camera_permission_granted: bool = false
+var _camera_permission_requested: bool = false
+var _left_image_placeholder: int = 0
+var _left_image_global: int = 0
+var _readback_registered: bool = false
 
 @onready var world_environment: WorldEnvironment = $WorldEnvironment if has_node("WorldEnvironment") else null
 
@@ -28,6 +39,8 @@ func _ready():
 			_on_openxr_session_begun()
 	else:
 		print("OpenXR interface not found.")
+		
+	_ensure_camera_permission()
 
 func _on_openxr_session_begun():
 	if _initialized:
@@ -52,8 +65,15 @@ func _on_openxr_session_begun():
 		print("[MNIST] OpenXRPicoSecureMR not supported.")
 		return
 
-	_deserialize_pipeline()
-	_run_cpu_readback()
+	_try_build_pipeline()
+
+	_last_submit_msec = 0
+	set_process(true)
+
+func _exit_tree() -> void:
+	if securemr != null and _left_image_global != 0 and _readback_registered:
+		securemr.release_readback(_left_image_global)
+		_readback_registered = false
 
 func enable_passthrough(enable: bool) -> void:
 	if passthrough_enabled == enable:
@@ -75,120 +95,120 @@ func enable_passthrough(enable: bool) -> void:
 				world_environment.environment.background_color = Color(0.3, 0.3, 0.3, 1.0)
 		passthrough_enabled = enable
 
-func _deserialize_pipeline():
-	fw = int(securemr.create_framework(3248, 2464))
-	print("Framework created: ", fw)
-	if fw == 0:
-		print("[MNIST] Failed to create framework")
+func _process(_delta: float) -> void:
+	_ensure_camera_permission()
+	_try_build_pipeline()
+
+	var now := Time.get_ticks_msec()
+	if _last_submit_msec != 0 and now - _last_submit_msec < SUBMIT_INTERVAL_MS:
+		return
+	if not _pipeline_ready or _pipeline_bindings.is_empty():
 		return
 
-	var json_path = assets_dir + "/mnist_pipeline.json"
-	if not FileAccess.file_exists(json_path):
-		print("Pipeline JSON not found: ", json_path)
+	if securemr == null:
 		return
 
-	var spec_str = FileAccess.get_file_as_string(json_path)
-	var spec = JSON.parse_string(spec_str)
-	if typeof(spec) != TYPE_DICTIONARY:
-		print("Invalid pipeline JSON")
+	securemr.execute_pipeline(pipeline_handle, _pipeline_bindings)
+
+	if _readback_registered and _left_image_global != 0:
+		var data: PackedByteArray = securemr.pop_readback(_left_image_global)
+		if data.size() > 0:
+			_on_readback_result(_left_image_global, data)
+		securemr.request_readback(_left_image_global)
+
+	_last_submit_msec = now
+
+func _ensure_camera_permission() -> void:
+	if _camera_permission_granted:
 		return
 
-	var res: Dictionary = securemr.deserialize_pipeline(fw, spec, assets_dir)
-	pipeline_handle = int(res.get("pipeline", 0))
-	tensors_map = res.get("tensors", {})
-	print("Deserialized pipeline: ", pipeline_handle)
-	_create_global_tensors()
-
-func _run_cpu_readback():
-	if fw == 0 or pipeline_handle == 0 or not _pipeline_ready:
-		print("[MNIST] Framework or pipeline not ready; skip readback")
+	if CAMERA_PERMISSION in OS.get_granted_permissions():
+		_camera_permission_granted = true
 		return
 
-	var rb = null
-	if Engine.has_singleton("OpenXRPicoReadbackTensorExtensionWrapper"):
-		rb = Engine.get_singleton("OpenXRPicoReadbackTensorExtensionWrapper")
-		if rb.has_method("debug_info"):
-			print("[MNIST][Readback Debug] ", rb.debug_info())
+	if not _camera_permission_requested:
+		if not OS.is_connected("on_request_permissions_result", Callable(self, "_on_request_permissions_result")):
+			OS.connect("on_request_permissions_result", Callable(self, "_on_request_permissions_result"))
+		_camera_permission_requested = true
+		var granted := OS.request_permission(CAMERA_PERMISSION)
+		if granted:
+			_camera_permission_granted = true
 
-	if not _submit_pipeline(true):
-		print("[MNIST] Failed to submit pipeline before readback")
+func _on_request_permissions_result(permission: String, granted: bool) -> void:
+	if permission != CAMERA_PERMISSION:
 		return
-
-	var crop_global: int = int(global_tensors.get("cropped_image", 0))
-	if crop_global == 0:
-		print("[MNIST] crop_global == 0; skip readback")
-		return
-
-	if rb != null and rb.is_readback_supported():
-		var cpu_bytes: PackedByteArray = rb.readback_global_tensor_cpu(crop_global)
-		if cpu_bytes.size() == 224 * 224 * 3:
-			var img := Image.create_from_data(224, 224, false, Image.FORMAT_RGB8, cpu_bytes)
-			var cpu_path := OS.get_user_data_dir().path_join("mnist_readback_cpu.png")
-			var err := img.save_png(cpu_path)
-			print("[MNIST][CPU] Saved:", cpu_path, " err=", err)
-		else:
-			print("[MNIST][CPU] Unexpected byte size:", cpu_bytes.size())
+	_camera_permission_requested = false
+	_camera_permission_granted = granted
+	if granted:
+		print("[MNIST] Camera permission granted.")
+		call_deferred("_try_build_pipeline")
 	else:
-		print("[MNIST][CPU] readback is not supported")
+		print("[MNIST] Camera permission denied. SecureMR readback unavailable.")
 
-func _create_global_tensors() -> void:
-	_pipeline_ready = false
-	_pipeline_bindings.clear()
-	if fw == 0 or pipeline_handle == 0:
+func _try_build_pipeline() -> void:
+	if _pipeline_ready:
+		return
+	if securemr == null or not _camera_permission_granted:
 		return
 
-	global_tensors.clear()
+	if fw == 0:
+		fw = securemr.create_framework(IMAGE_WIDTH, IMAGE_HEIGHT)
+		if fw == 0:
+			print("[MNIST] Failed to create SecureMR framework.")
+			return
+		print("[MNIST] SecureMR framework created (handle=%d)." % fw)
 
-	var dims_class := PackedInt32Array()
-	dims_class.push_back(1)
-	global_tensors["predicted_class"] = int(securemr.create_global_tensor_shape(fw, dims_class, 5, 1, 2, false)) # INT32 scalar
+	if pipeline_handle == 0:
+		pipeline_handle = securemr.create_pipeline(fw)
+		if pipeline_handle == 0:
+			print("[MNIST] Failed to create SecureMR pipeline.")
+			return
+		print("[MNIST] SecureMR pipeline created (handle=%d)." % pipeline_handle)
 
-	var dims_score := PackedInt32Array()
-	dims_score.push_back(1)
-	global_tensors["predicted_score"] = int(securemr.create_global_tensor_shape(fw, dims_score, 6, 1, 2, false)) # FLOAT32 scalar
-
-	var dims_crop := PackedInt32Array()
-	dims_crop.push_back(224)
-	dims_crop.push_back(224)
-	global_tensors["cropped_image"] = int(securemr.create_global_tensor_shape(fw, dims_crop, 1, 3, 6, false)) # UINT8 RGB MAT
-
-	for key in global_tensors.keys():
-		if int(global_tensors[key]) == 0:
-			print("[MNIST] Failed to create global tensor for ", key)
+	if _left_image_placeholder == 0:
+		var dims := PackedInt32Array([IMAGE_HEIGHT, IMAGE_WIDTH])
+		_left_image_placeholder = securemr.create_pipeline_tensor_shape(pipeline_handle, dims, TENSOR_DATA_TYPE_UINT8, IMAGE_CHANNELS, TENSOR_TYPE_MAT, true)
+		if _left_image_placeholder == 0:
+			print("[MNIST] Failed to create pipeline tensor placeholder for VST image.")
 			return
 
-	_build_pipeline_bindings()
-	if _pipeline_bindings.size() != 3:
-		print("[MNIST] Pipeline bindings incomplete; submit disabled")
-		return
+	if _left_image_global == 0:
+		var dims := PackedInt32Array([IMAGE_HEIGHT, IMAGE_WIDTH])
+		_left_image_global = securemr.create_global_tensor_shape(fw, dims, TENSOR_DATA_TYPE_UINT8, IMAGE_CHANNELS, TENSOR_TYPE_MAT, false)
+		if _left_image_global == 0:
+			print("[MNIST] Failed to create global tensor for VST image.")
+			return
+		global_tensors["left_vst"] = _left_image_global
+
+	if _pipeline_bindings.is_empty():
+		securemr.op_camera_access(pipeline_handle, _left_image_placeholder, 0, 0, 0)
+		tensors_map["left_vst_placeholder"] = _left_image_placeholder
+		_pipeline_bindings = [{
+			"local": _left_image_placeholder,
+			"global": _left_image_global,
+		}]
 
 	_pipeline_ready = true
-	_last_submit_msec = 0
-	set_process(true)
+	if not _readback_registered and _left_image_global != 0:
+		_readback_registered = securemr.ensure_readback(_left_image_global, SUBMIT_INTERVAL_MS)
+		if _readback_registered:
+			print("[MNIST] Readback registered for global tensor %d" % _left_image_global)
+			securemr.request_readback(_left_image_global)
+		else:
+			print("[MNIST] Failed to register readback for tensor %d" % _left_image_global)
 
-func _build_pipeline_bindings() -> void:
-	_pipeline_bindings.clear()
-	var mapping_names := ["predicted_class", "predicted_score", "cropped_image"]
-	for name in mapping_names:
-		var local_handle := int(tensors_map.get(name, 0))
-		var global_handle := int(global_tensors.get(name, 0))
-		if local_handle == 0 or global_handle == 0:
-			print("[MNIST] Missing tensor binding for ", name)
-			continue
-		_pipeline_bindings.append({
-			"local": local_handle,
-			"global": global_handle,
-		})
-
-func _submit_pipeline(force: bool = false) -> bool:
-	if not _pipeline_ready or _pipeline_bindings.is_empty():
-		return false
-	var now := Time.get_ticks_msec()
-	if not force and _last_submit_msec != 0 and now - _last_submit_msec < SUBMIT_INTERVAL_MS:
-		return false
-	securemr.execute_pipeline(pipeline_handle, _pipeline_bindings)
-	_last_submit_msec = now
-	return true
-
-func _process(_delta: float) -> void:
-	_submit_pipeline()
+func _on_readback_result(handle: int, data: PackedByteArray) -> void:
+	if handle != _left_image_global:
+		return
+	var expected_size := IMAGE_WIDTH * IMAGE_HEIGHT * IMAGE_CHANNELS
+	if data.size() > 0:
+		print("[MNIST][Readback] left_vst shape: %dx%dx%d bytes=%d%s" % [
+			IMAGE_HEIGHT,
+			IMAGE_WIDTH,
+			IMAGE_CHANNELS,
+			data.size(),
+			"" if data.size() == expected_size else " (expected %d)" % expected_size
+		])
+	else:
+		print("[MNIST][Readback] left_vst readback returned empty buffer.")
+	print("[MNIST] Readback pipeline ready. Placeholder=%d Global=%d" % [_left_image_placeholder, _left_image_global])

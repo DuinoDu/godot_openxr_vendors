@@ -30,10 +30,15 @@
 #include "classes/openxr_pico_secure_mr.h"
 
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/classes/file_access.hpp>
 
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
+#include "extensions/openxr_pico_readback_tensor_extension_wrapper.h"
+
+#include <vector>
+#include <utility>
 
 using namespace godot;
 
@@ -49,10 +54,12 @@ OpenXRPicoSecureMR *OpenXRPicoSecureMR::get_singleton() {
 OpenXRPicoSecureMR::OpenXRPicoSecureMR() {
     ERR_FAIL_COND_MSG(singleton != nullptr, "An OpenXRPicoSecureMR singleton already exists.");
     wrapper = OpenXRPicoSecureMRExtensionWrapper::get_singleton();
+    _update_readback_wrapper();
     singleton = this;
 }
 
 OpenXRPicoSecureMR::~OpenXRPicoSecureMR() {
+    _stop_all_readback_jobs();
     singleton = nullptr;
 }
 
@@ -78,6 +85,7 @@ uint64_t OpenXRPicoSecureMR::create_pipeline(uint64_t framework_handle) {
 }
 
 void OpenXRPicoSecureMR::destroy_pipeline(uint64_t pipeline_handle) {
+    _release_pipeline_buffers(pipeline_handle);
     if (!wrapper) return;
     wrapper->destroy_pipeline(pipeline_handle);
 }
@@ -379,6 +387,108 @@ void OpenXRPicoSecureMR::op_gltf_update(uint64_t pipeline_handle, int32_t attrib
     }
 }
 
+bool OpenXRPicoSecureMR::ensure_readback(uint64_t global_tensor_handle, int32_t interval_msec) {
+    if (global_tensor_handle == 0) {
+        return false;
+    }
+
+    int32_t clamped_interval = interval_msec < 0 ? 0 : interval_msec;
+
+    std::unique_lock<std::mutex> map_lock(readback_jobs_mutex);
+    ReadbackJob *job = _ensure_readback_job_locked(global_tensor_handle);
+    if (job == nullptr) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> job_lock(job->mutex);
+        job->interval_ms = clamped_interval;
+        job->next_allowed_time = std::chrono::steady_clock::now();
+        job->request_pending = true;
+    }
+    map_lock.unlock();
+    job->cv.notify_one();
+    return true;
+}
+
+void OpenXRPicoSecureMR::release_readback(uint64_t global_tensor_handle) {
+    if (global_tensor_handle == 0) {
+        return;
+    }
+    std::unique_ptr<ReadbackJob> job_ptr;
+    {
+        std::lock_guard<std::mutex> guard(readback_jobs_mutex);
+        auto it = readback_jobs.find(global_tensor_handle);
+        if (it == readback_jobs.end()) {
+            return;
+        }
+        job_ptr = std::move(it->second);
+        readback_jobs.erase(it);
+    }
+
+    if (!job_ptr) {
+        return;
+    }
+
+    {
+        std::unique_lock<std::mutex> job_lock(job_ptr->mutex);
+        job_ptr->stop_requested = true;
+        job_ptr->request_pending = true;
+    }
+    job_ptr->cv.notify_all();
+
+    if (job_ptr->worker.joinable()) {
+        job_ptr->worker.join();
+    }
+}
+
+bool OpenXRPicoSecureMR::request_readback(uint64_t global_tensor_handle) {
+    if (global_tensor_handle == 0) {
+        return false;
+    }
+
+    std::unique_lock<std::mutex> map_lock(readback_jobs_mutex);
+    auto it = readback_jobs.find(global_tensor_handle);
+    if (it == readback_jobs.end()) {
+        return false;
+    }
+    ReadbackJob *job = it->second.get();
+    std::unique_lock<std::mutex> job_lock(job->mutex);
+    map_lock.unlock();
+
+    if (job->stop_requested || job->wrapper == nullptr) {
+        return false;
+    }
+    job->request_pending = true;
+    job_lock.unlock();
+    job->cv.notify_one();
+    return true;
+}
+
+PackedByteArray OpenXRPicoSecureMR::pop_readback(uint64_t global_tensor_handle) {
+    PackedByteArray out;
+    if (global_tensor_handle == 0) {
+        return out;
+    }
+
+    std::unique_lock<std::mutex> map_lock(readback_jobs_mutex);
+    auto it = readback_jobs.find(global_tensor_handle);
+    if (it == readback_jobs.end()) {
+        return out;
+    }
+    ReadbackJob *job = it->second.get();
+    std::unique_lock<std::mutex> job_lock(job->mutex);
+    map_lock.unlock();
+
+    if (!job->data_ready) {
+        return out;
+    }
+    out = job->latest_data;
+    job->latest_data = PackedByteArray();
+    job->data_ready = false;
+    return out;
+}
+
 // Minimal string->enum mapping for common SecureMR operators used by the MNIST sample.
 static int _oxr_securemr_op_from_string(const String &s) {
     if (s == String("XR_SECURE_MR_OPERATOR_TYPE_UNKNOWN_PICO")) return XR_SECURE_MR_OPERATOR_TYPE_UNKNOWN_PICO;
@@ -415,6 +525,134 @@ static int _oxr_securemr_op_from_string(const String &s) {
     return -1;
 }
 
+void OpenXRPicoSecureMR::_update_readback_wrapper() {
+    if (readback_wrapper != nullptr) {
+        return;
+    }
+    readback_wrapper = OpenXRPicoReadbackTensorExtensionWrapper::get_singleton();
+}
+
+OpenXRPicoSecureMR::ReadbackJob *OpenXRPicoSecureMR::_ensure_readback_job_locked(uint64_t global_tensor_handle) {
+    auto it = readback_jobs.find(global_tensor_handle);
+    if (it != readback_jobs.end()) {
+        return it->second.get();
+    }
+
+    _update_readback_wrapper();
+    if (readback_wrapper == nullptr || !readback_wrapper->is_readback_supported()) {
+        return nullptr;
+    }
+
+    auto job = std::make_unique<ReadbackJob>();
+    job->tensor_handle = global_tensor_handle;
+    job->wrapper = readback_wrapper;
+    job->interval_ms = 33;
+    job->next_allowed_time = std::chrono::steady_clock::now();
+    job->request_pending = true;
+    ReadbackJob *job_ptr = job.get();
+    job_ptr->worker = std::thread(&OpenXRPicoSecureMR::_readback_thread_proc, job_ptr);
+    readback_jobs.emplace(global_tensor_handle, std::move(job));
+    return job_ptr;
+}
+
+void OpenXRPicoSecureMR::_stop_all_readback_jobs() {
+    std::vector<std::unique_ptr<ReadbackJob>> jobs;
+    {
+        std::lock_guard<std::mutex> guard(readback_jobs_mutex);
+        for (auto &kv : readback_jobs) {
+            jobs.push_back(std::move(kv.second));
+        }
+        readback_jobs.clear();
+    }
+
+    for (auto &job_ptr : jobs) {
+        if (!job_ptr) {
+            continue;
+        }
+        {
+            std::unique_lock<std::mutex> job_lock(job_ptr->mutex);
+            job_ptr->stop_requested = true;
+            job_ptr->request_pending = true;
+        }
+        job_ptr->cv.notify_all();
+        if (job_ptr->worker.joinable()) {
+            job_ptr->worker.join();
+        }
+    }
+}
+
+void OpenXRPicoSecureMR::_readback_thread_proc(ReadbackJob *job) {
+    if (job == nullptr) {
+        return;
+    }
+
+    std::unique_lock<std::mutex> lock(job->mutex);
+    while (!job->stop_requested) {
+        if (!job->request_pending) {
+            if (job->interval_ms > 0) {
+                if (job->next_allowed_time == std::chrono::steady_clock::time_point()) {
+                    job->next_allowed_time = std::chrono::steady_clock::now();
+                }
+                job->cv.wait_until(lock, job->next_allowed_time, [job]() {
+                    return job->stop_requested || job->request_pending;
+                });
+                if (job->stop_requested) {
+                    break;
+                }
+                if (!job->request_pending) {
+                    job->request_pending = true;
+                }
+            } else {
+                job->cv.wait(lock, [job]() {
+                    return job->stop_requested || job->request_pending;
+                });
+                continue;
+            }
+        }
+
+        if (job->stop_requested) {
+            break;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (job->interval_ms > 0 && job->next_allowed_time != std::chrono::steady_clock::time_point() && now < job->next_allowed_time) {
+            job->cv.wait_until(lock, job->next_allowed_time, [job]() {
+                return job->stop_requested || job->request_pending;
+            });
+            continue;
+        }
+
+        job->request_pending = false;
+        job->busy = true;
+        lock.unlock();
+
+        PackedByteArray data;
+        if (job->wrapper != nullptr && job->tensor_handle != 0) {
+            data = job->wrapper->readback_global_tensor_cpu(job->tensor_handle);
+        }
+
+        auto finish_time = std::chrono::steady_clock::now();
+
+        lock.lock();
+        job->latest_data = data;
+        job->data_ready = true;
+        job->busy = false;
+        if (job->interval_ms > 0) {
+            job->next_allowed_time = finish_time + std::chrono::milliseconds(job->interval_ms);
+        } else {
+            job->next_allowed_time = std::chrono::steady_clock::time_point();
+        }
+        lock.unlock();
+        job->cv.notify_all();
+        lock.lock();
+    }
+
+    job->busy = false;
+    job->request_pending = false;
+    lock.unlock();
+    job->cv.notify_all();
+}
+
 static int32_t _oxr_securemr_encoding_from_data_type(int32_t data_type) {
     switch (data_type) {
         case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT8_PICO:
@@ -439,6 +677,7 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
 
     uint64_t pipeline = create_pipeline(framework_handle);
     out["pipeline"] = (uint64_t)pipeline;
+    _release_pipeline_buffers(pipeline);
 
     Dictionary tensors_out;
     Dictionary tensor_data_types;
@@ -530,6 +769,13 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
                     continue;
                 }
 
+                // Persist the model buffer so native runtime can read it after deserialization returns.
+                PackedByteArray stored_model = _retain_pipeline_buffer(pipeline, model_data);
+                if (stored_model.is_empty()) {
+                    UtilityFunctions::push_error(vformat("[PicoSecureMR] Failed to retain model buffer for pipeline %llu.", (uint64_t)pipeline));
+                    continue;
+                }
+
                 String input_name = "input";
                 if (od.has("inputs") && od["inputs"].get_type() == Variant::ARRAY) {
                     Array ia = od["inputs"];
@@ -568,7 +814,7 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
                     }
                 }
 
-                oph = wrapper->create_operator_model(pipeline, model_data, model_name, input_name, out_names, out_enc);
+                oph = wrapper->create_operator_model(pipeline, stored_model, model_name, input_name, out_names, out_enc);
             } else if (type == XR_SECURE_MR_OPERATOR_TYPE_NMS_PICO) {
                 float threshold = od.has("threshold") ? (float)(double)od["threshold"] : 0.5f;
                 oph = wrapper->create_operator_nms(pipeline, threshold);
@@ -643,6 +889,38 @@ Dictionary OpenXRPicoSecureMR::deserialize_pipeline(uint64_t framework_handle, c
     return out;
 }
 
+PackedByteArray OpenXRPicoSecureMR::_retain_pipeline_buffer(uint64_t pipeline_handle, const PackedByteArray &buffer) {
+    PackedByteArray out;
+    if (pipeline_handle == 0 || buffer.is_empty()) {
+        return out;
+    }
+
+    Variant key = (uint64_t)pipeline_handle;
+    Variant existing = pipeline_model_buffers.get(key, Variant());
+    Array stored;
+    if (existing.get_type() == Variant::ARRAY) {
+        stored = existing;
+    }
+    // Append a copy of the buffer so the underlying data stays alive while the pipeline exists.
+    stored.append(buffer);
+    pipeline_model_buffers.set(key, stored);
+
+    Variant last = stored[stored.size() - 1];
+    if (last.get_type() == Variant::PACKED_BYTE_ARRAY) {
+        out = last;
+    }
+    return out;
+}
+
+void OpenXRPicoSecureMR::_release_pipeline_buffers(uint64_t pipeline_handle) {
+    if (pipeline_handle == 0 || pipeline_model_buffers.is_empty()) {
+        return;
+    }
+
+    Variant key = (uint64_t)pipeline_handle;
+    pipeline_model_buffers.erase(key);
+}
+
 void OpenXRPicoSecureMR::_bind_methods() {
     // Static singleton accessor for GDScript (ClassName.get_singleton()).
     ClassDB::bind_static_method("OpenXRPicoSecureMR", D_METHOD("get_singleton"), &OpenXRPicoSecureMR::get_singleton);
@@ -661,6 +939,11 @@ void OpenXRPicoSecureMR::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("reset_pipeline_tensor_bytes", "pipeline_handle", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_pipeline_tensor_bytes);
     ClassDB::bind_method(D_METHOD("reset_pipeline_tensor_floats", "pipeline_handle", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_pipeline_tensor_floats);
+
+    ClassDB::bind_method(D_METHOD("ensure_readback", "global_tensor_handle", "interval_msec"), &OpenXRPicoSecureMR::ensure_readback, DEFVAL(33));
+    ClassDB::bind_method(D_METHOD("release_readback", "global_tensor_handle"), &OpenXRPicoSecureMR::release_readback);
+    ClassDB::bind_method(D_METHOD("request_readback", "global_tensor_handle"), &OpenXRPicoSecureMR::request_readback);
+    ClassDB::bind_method(D_METHOD("pop_readback", "global_tensor_handle"), &OpenXRPicoSecureMR::pop_readback);
 
     ClassDB::bind_method(D_METHOD("create_operator_basic", "pipeline_handle", "operator_type"), &OpenXRPicoSecureMR::create_operator_basic);
     ClassDB::bind_method(D_METHOD("create_operator_arithmetic", "pipeline_handle", "config_text"), &OpenXRPicoSecureMR::create_operator_arithmetic);
