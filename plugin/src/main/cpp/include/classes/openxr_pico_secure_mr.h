@@ -40,12 +40,18 @@
 #include <openxr/openxr.h>
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 
-#include <condition_variable>
+struct XrReadbackTensorBufferPICO;
+struct XrCreateBufferFromGlobalTensorCompletionPICO;
+
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace godot {
 
@@ -174,28 +180,41 @@ private:
     void set_named_output(uint64_t pipeline_handle, uint64_t operator_handle, uint64_t tensor_handle, const char *name);
     void do_elementwise(uint64_t pipeline_handle, int32_t op_type, uint64_t a_tensor, uint64_t b_tensor, uint64_t result_tensor);
 
-    struct ReadbackJob {
+    struct ReadbackTarget {
         uint64_t tensor_handle = 0;
-        OpenXRPicoReadbackTensorExtensionWrapper *wrapper = nullptr;
-        std::thread worker;
-        std::mutex mutex;
-        std::condition_variable cv;
-        bool stop_requested = false;
-        bool request_pending = false;
-        bool busy = false;
+        int interval_ms = 33;
+        std::chrono::steady_clock::time_point next_schedule = std::chrono::steady_clock::time_point();
+        bool in_flight = false;
+        bool active = true;
+        bool manual_request = false;
         bool data_ready = false;
         PackedByteArray latest_data;
-        int interval_ms = 33;
-        std::chrono::steady_clock::time_point next_allowed_time = std::chrono::steady_clock::time_point();
     };
 
-    std::mutex readback_jobs_mutex;
-    std::unordered_map<uint64_t, std::unique_ptr<ReadbackJob>> readback_jobs;
+    struct ReadbackPendingFuture {
+        std::shared_ptr<ReadbackTarget> target;
+        XrFutureEXT future = XR_NULL_HANDLE;
+    };
 
-    ReadbackJob *_ensure_readback_job_locked(uint64_t global_tensor_handle);
-    void _stop_all_readback_jobs();
+    std::mutex readback_mutex;
+    std::condition_variable readback_cv;
+    std::unordered_map<uint64_t, std::shared_ptr<ReadbackTarget>> readback_targets;
+    std::deque<ReadbackPendingFuture> readback_future_queue;
+    std::thread readback_thread;
+    std::atomic<bool> readback_thread_running{false};
+    std::atomic<bool> readback_thread_stop{false};
+
     void _update_readback_wrapper();
-    static void _readback_thread_proc(ReadbackJob *job);
+    void _ensure_readback_thread();
+    void _stop_readback_thread();
+    void _readback_thread_main();
+    bool _has_ready_target_locked();
+    void _schedule_ready_targets(std::vector<std::shared_ptr<ReadbackTarget>> &out_ready);
+    void _enqueue_future_for_target(const std::shared_ptr<ReadbackTarget> &target);
+    bool _process_next_future();
+    void _process_pending_futures();
+    bool _complete_future_for_target(const std::shared_ptr<ReadbackTarget> &target, XrFutureEXT future, PackedByteArray &out_data);
+    bool _wait_for_readback_completion(const std::shared_ptr<ReadbackTarget> &target, XrSecureMrTensorPICO tensor, XrFutureEXT future, XrReadbackTensorBufferPICO &buffer, XrCreateBufferFromGlobalTensorCompletionPICO &completion);
 };
 
 } // namespace godot

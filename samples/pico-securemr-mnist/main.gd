@@ -111,8 +111,10 @@ func _process(_delta: float) -> void:
 	securemr.execute_pipeline(pipeline_handle, _pipeline_bindings)
 
 	if _readback_registered and _left_image_global != 0:
-		var data: PackedByteArray = securemr.pop_readback(_left_image_global)
-		if data.size() > 0:
+		while true:
+			var data: PackedByteArray = securemr.pop_readback(_left_image_global)
+			if data.is_empty():
+				break
 			_on_readback_result(_left_image_global, data)
 		securemr.request_readback(_left_image_global)
 
@@ -198,6 +200,7 @@ func _try_build_pipeline() -> void:
 			print("[MNIST] Failed to register readback for tensor %d" % _left_image_global)
 
 func _on_readback_result(handle: int, data: PackedByteArray) -> void:
+	print("_on_readback_result start")
 	if handle != _left_image_global:
 		return
 	var expected_size := IMAGE_WIDTH * IMAGE_HEIGHT * IMAGE_CHANNELS

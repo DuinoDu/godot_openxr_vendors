@@ -37,10 +37,92 @@
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 #include "extensions/openxr_pico_readback_tensor_extension_wrapper.h"
 
+#include <algorithm>
 #include <vector>
 #include <utility>
 
 using namespace godot;
+
+namespace {
+
+constexpr std::chrono::milliseconds READBACK_POLL_INTERVAL_MS{5};
+constexpr size_t READBACK_QUEUE_MAX_DEPTH = 100;
+
+} // namespace
+
+bool OpenXRPicoSecureMR::_wait_for_readback_completion(const std::shared_ptr<ReadbackTarget> &target, XrSecureMrTensorPICO tensor, XrFutureEXT future, XrReadbackTensorBufferPICO &buffer, XrCreateBufferFromGlobalTensorCompletionPICO &completion) {
+    if (!target || readback_wrapper == nullptr) {
+        return false;
+    }
+
+    while (true) {
+      XrResult result; 
+
+      if (!readback_thread_stop.load(std::memory_order_acquire)) {
+          if (!target->active) {
+              return false;
+          }
+
+          completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
+          completion.next = nullptr;
+          completion.futureResult = XR_SUCCESS;
+          completion.tensorBuffer = &buffer;
+
+          result = readback_wrapper->xrCreateBufferFromGlobalTensorCompletePICO(tensor, future, &completion);
+          if (result == XR_SUCCESS) {
+              return true;
+          }
+      }
+      UtilityFunctions::print(vformat("[PicoSecureMR] xrCreateBufferFromGlobalTensorCompletePICO failed with %d", (int)result));
+      std::this_thread::sleep_for(READBACK_POLL_INTERVAL_MS);
+    }
+
+
+    return false;
+}
+
+bool OpenXRPicoSecureMR::_complete_future_for_target(const std::shared_ptr<ReadbackTarget> &target, XrFutureEXT future, PackedByteArray &out_data) {
+    if (!target || readback_wrapper == nullptr) {
+        return false;
+    }
+
+    XrSecureMrTensorPICO tensor = (XrSecureMrTensorPICO)target->tensor_handle;
+
+    XrReadbackTensorBufferPICO buffer = {};
+    buffer.bufferCapacityInput = 0;
+    buffer.bufferSizeOutput = 0;
+    buffer.buffer = nullptr;
+
+    XrCreateBufferFromGlobalTensorCompletionPICO completion = {};
+
+    if (!_wait_for_readback_completion(target, tensor, future, buffer, completion)) {
+        return false;
+    }
+
+    const uint32_t required_size = buffer.bufferSizeOutput;
+    out_data.resize(required_size);
+    if (required_size > 0) {
+        buffer.bufferCapacityInput = required_size;
+        buffer.buffer = out_data.ptrw();
+    }
+
+    if (!_wait_for_readback_completion(target, tensor, future, buffer, completion)) {
+        out_data.resize(0);
+        return false;
+    }
+
+    if (completion.futureResult != XR_SUCCESS) {
+        UtilityFunctions::printerr(vformat("[PicoSecureMR] Readback future returned %d for tensor %llu", (int)completion.futureResult, (uint64_t)target->tensor_handle));
+        out_data.resize(0);
+        return false;
+    }
+
+    if (buffer.bufferSizeOutput < required_size) {
+        out_data.resize(buffer.bufferSizeOutput);
+    }
+
+    return true;
+}
 
 OpenXRPicoSecureMR *OpenXRPicoSecureMR::singleton = nullptr;
 
@@ -59,7 +141,7 @@ OpenXRPicoSecureMR::OpenXRPicoSecureMR() {
 }
 
 OpenXRPicoSecureMR::~OpenXRPicoSecureMR() {
-    _stop_all_readback_jobs();
+    _stop_readback_thread();
     singleton = nullptr;
 }
 
@@ -392,22 +474,37 @@ bool OpenXRPicoSecureMR::ensure_readback(uint64_t global_tensor_handle, int32_t 
         return false;
     }
 
-    int32_t clamped_interval = interval_msec < 0 ? 0 : interval_msec;
-
-    std::unique_lock<std::mutex> map_lock(readback_jobs_mutex);
-    ReadbackJob *job = _ensure_readback_job_locked(global_tensor_handle);
-    if (job == nullptr) {
+    _update_readback_wrapper();
+    if (readback_wrapper == nullptr || !readback_wrapper->is_readback_supported()) {
+        UtilityFunctions::push_error("[PicoSecureMR] Readback extension not available.");
         return false;
     }
 
+    const int32_t clamped_interval = interval_msec < 0 ? 0 : interval_msec;
+
     {
-        std::lock_guard<std::mutex> job_lock(job->mutex);
-        job->interval_ms = clamped_interval;
-        job->next_allowed_time = std::chrono::steady_clock::now();
-        job->request_pending = true;
+        std::lock_guard<std::mutex> lock(readback_mutex);
+        auto it = readback_targets.find(global_tensor_handle);
+        if (it != readback_targets.end()) {
+            auto target = it->second;
+            if (target) {
+                target->interval_ms = clamped_interval;
+                target->active = true;
+                if (!target->in_flight) {
+                    target->next_schedule = std::chrono::steady_clock::now();
+                }
+            }
+        } else {
+            auto target = std::make_shared<ReadbackTarget>();
+            target->tensor_handle = global_tensor_handle;
+            target->interval_ms = clamped_interval;
+            target->next_schedule = std::chrono::steady_clock::now();
+            readback_targets.emplace(global_tensor_handle, target);
+        }
     }
-    map_lock.unlock();
-    job->cv.notify_one();
+
+    readback_cv.notify_all();
+    _ensure_readback_thread();
     return true;
 }
 
@@ -415,31 +512,21 @@ void OpenXRPicoSecureMR::release_readback(uint64_t global_tensor_handle) {
     if (global_tensor_handle == 0) {
         return;
     }
-    std::unique_ptr<ReadbackJob> job_ptr;
-    {
-        std::lock_guard<std::mutex> guard(readback_jobs_mutex);
-        auto it = readback_jobs.find(global_tensor_handle);
-        if (it == readback_jobs.end()) {
-            return;
-        }
-        job_ptr = std::move(it->second);
-        readback_jobs.erase(it);
-    }
 
-    if (!job_ptr) {
+    std::lock_guard<std::mutex> lock(readback_mutex);
+    auto it = readback_targets.find(global_tensor_handle);
+    if (it == readback_targets.end()) {
         return;
     }
-
-    {
-        std::unique_lock<std::mutex> job_lock(job_ptr->mutex);
-        job_ptr->stop_requested = true;
-        job_ptr->request_pending = true;
+    auto target = it->second;
+    if (target) {
+        target->active = false;
+        target->manual_request = false;
+        target->data_ready = false;
+        target->latest_data = PackedByteArray();
     }
-    job_ptr->cv.notify_all();
-
-    if (job_ptr->worker.joinable()) {
-        job_ptr->worker.join();
-    }
+    readback_targets.erase(it);
+    readback_cv.notify_all();
 }
 
 bool OpenXRPicoSecureMR::request_readback(uint64_t global_tensor_handle) {
@@ -447,21 +534,18 @@ bool OpenXRPicoSecureMR::request_readback(uint64_t global_tensor_handle) {
         return false;
     }
 
-    std::unique_lock<std::mutex> map_lock(readback_jobs_mutex);
-    auto it = readback_jobs.find(global_tensor_handle);
-    if (it == readback_jobs.end()) {
+    std::lock_guard<std::mutex> lock(readback_mutex);
+    auto it = readback_targets.find(global_tensor_handle);
+    if (it == readback_targets.end()) {
         return false;
     }
-    ReadbackJob *job = it->second.get();
-    std::unique_lock<std::mutex> job_lock(job->mutex);
-    map_lock.unlock();
-
-    if (job->stop_requested || job->wrapper == nullptr) {
+    auto target = it->second;
+    if (!target || !target->active) {
         return false;
     }
-    job->request_pending = true;
-    job_lock.unlock();
-    job->cv.notify_one();
+    target->manual_request = true;
+    target->next_schedule = std::chrono::steady_clock::now();
+    readback_cv.notify_all();
     return true;
 }
 
@@ -471,21 +555,20 @@ PackedByteArray OpenXRPicoSecureMR::pop_readback(uint64_t global_tensor_handle) 
         return out;
     }
 
-    std::unique_lock<std::mutex> map_lock(readback_jobs_mutex);
-    auto it = readback_jobs.find(global_tensor_handle);
-    if (it == readback_jobs.end()) {
+    std::lock_guard<std::mutex> lock(readback_mutex);
+    auto it = readback_targets.find(global_tensor_handle);
+    if (it == readback_targets.end()) {
         return out;
     }
-    ReadbackJob *job = it->second.get();
-    std::unique_lock<std::mutex> job_lock(job->mutex);
-    map_lock.unlock();
 
-    if (!job->data_ready) {
+    auto target = it->second;
+    if (!target || !target->data_ready) {
         return out;
     }
-    out = job->latest_data;
-    job->latest_data = PackedByteArray();
-    job->data_ready = false;
+
+    out = target->latest_data;
+    target->latest_data = PackedByteArray();
+    target->data_ready = false;
     return out;
 }
 
@@ -532,125 +615,203 @@ void OpenXRPicoSecureMR::_update_readback_wrapper() {
     readback_wrapper = OpenXRPicoReadbackTensorExtensionWrapper::get_singleton();
 }
 
-OpenXRPicoSecureMR::ReadbackJob *OpenXRPicoSecureMR::_ensure_readback_job_locked(uint64_t global_tensor_handle) {
-    auto it = readback_jobs.find(global_tensor_handle);
-    if (it != readback_jobs.end()) {
-        return it->second.get();
+void OpenXRPicoSecureMR::_ensure_readback_thread() {
+    bool expected = false;
+    if (readback_thread_running.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        readback_thread_stop.store(false, std::memory_order_release);
+        readback_thread = std::thread(&OpenXRPicoSecureMR::_readback_thread_main, this);
     }
-
-    _update_readback_wrapper();
-    if (readback_wrapper == nullptr || !readback_wrapper->is_readback_supported()) {
-        return nullptr;
-    }
-
-    auto job = std::make_unique<ReadbackJob>();
-    job->tensor_handle = global_tensor_handle;
-    job->wrapper = readback_wrapper;
-    job->interval_ms = 33;
-    job->next_allowed_time = std::chrono::steady_clock::now();
-    job->request_pending = true;
-    ReadbackJob *job_ptr = job.get();
-    job_ptr->worker = std::thread(&OpenXRPicoSecureMR::_readback_thread_proc, job_ptr);
-    readback_jobs.emplace(global_tensor_handle, std::move(job));
-    return job_ptr;
 }
 
-void OpenXRPicoSecureMR::_stop_all_readback_jobs() {
-    std::vector<std::unique_ptr<ReadbackJob>> jobs;
-    {
-        std::lock_guard<std::mutex> guard(readback_jobs_mutex);
-        for (auto &kv : readback_jobs) {
-            jobs.push_back(std::move(kv.second));
-        }
-        readback_jobs.clear();
+void OpenXRPicoSecureMR::_stop_readback_thread() {
+    readback_thread_stop.store(true, std::memory_order_release);
+    readback_cv.notify_all();
+    if (readback_thread.joinable()) {
+        readback_thread.join();
     }
+    readback_thread_running.store(false, std::memory_order_release);
 
-    for (auto &job_ptr : jobs) {
-        if (!job_ptr) {
+    std::lock_guard<std::mutex> lock(readback_mutex);
+    readback_targets.clear();
+    readback_future_queue.clear();
+}
+
+bool OpenXRPicoSecureMR::_has_ready_target_locked() {
+    auto now = std::chrono::steady_clock::now();
+    for (auto &kv : readback_targets) {
+        const auto &target = kv.second;
+        if (!target || !target->active) {
             continue;
         }
-        {
-            std::unique_lock<std::mutex> job_lock(job_ptr->mutex);
-            job_ptr->stop_requested = true;
-            job_ptr->request_pending = true;
+        if (target->manual_request) {
+            return true;
         }
-        job_ptr->cv.notify_all();
-        if (job_ptr->worker.joinable()) {
-            job_ptr->worker.join();
+        if (!target->in_flight) {
+            if (target->next_schedule == std::chrono::steady_clock::time_point() || target->next_schedule <= now) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void OpenXRPicoSecureMR::_schedule_ready_targets(std::vector<std::shared_ptr<ReadbackTarget>> &out_ready) {
+    auto now = std::chrono::steady_clock::now();
+    for (auto &kv : readback_targets) {
+        auto target = kv.second;
+        if (!target || !target->active || target->in_flight) {
+            continue;
+        }
+        if (target->manual_request) {
+            target->manual_request = false;
+            target->in_flight = true;
+            out_ready.push_back(target);
+            continue;
+        }
+        if (target->next_schedule == std::chrono::steady_clock::time_point()) {
+            target->next_schedule = now;
+        }
+        if (target->next_schedule <= now) {
+            target->in_flight = true;
+            out_ready.push_back(target);
         }
     }
 }
 
-void OpenXRPicoSecureMR::_readback_thread_proc(ReadbackJob *job) {
-    if (job == nullptr) {
+void OpenXRPicoSecureMR::_enqueue_future_for_target(const std::shared_ptr<ReadbackTarget> &target) {
+    if (!target || readback_wrapper == nullptr) {
         return;
     }
 
-    std::unique_lock<std::mutex> lock(job->mutex);
-    while (!job->stop_requested) {
-        if (!job->request_pending) {
-            if (job->interval_ms > 0) {
-                if (job->next_allowed_time == std::chrono::steady_clock::time_point()) {
-                    job->next_allowed_time = std::chrono::steady_clock::now();
-                }
-                job->cv.wait_until(lock, job->next_allowed_time, [job]() {
-                    return job->stop_requested || job->request_pending;
-                });
-                if (job->stop_requested) {
-                    break;
-                }
-                if (!job->request_pending) {
-                    job->request_pending = true;
-                }
+    XrFutureEXT future = XR_NULL_HANDLE;
+    XrSecureMrTensorPICO tensor = (XrSecureMrTensorPICO)target->tensor_handle;
+    XrResult result = readback_wrapper->xrCreateBufferFromGlobalTensorAsyncPICO(tensor, &future);
+    if (XR_FAILED(result) || future == XR_NULL_HANDLE) {
+        UtilityFunctions::printerr(vformat("[PicoSecureMR] xrCreateBufferFromGlobalTensorAsyncPICO failed with %d for tensor %llu", (int)result, (uint64_t)target->tensor_handle));
+        std::lock_guard<std::mutex> lock(readback_mutex);
+        target->in_flight = false;
+        target->next_schedule = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(0, target->interval_ms));
+        return;
+    }
+
+    std::unique_lock<std::mutex> lock(readback_mutex);
+    while (readback_future_queue.size() >= READBACK_QUEUE_MAX_DEPTH && !readback_thread_stop.load(std::memory_order_acquire)) {
+        lock.unlock();
+        if (!_process_next_future()) {
+            std::this_thread::sleep_for(READBACK_POLL_INTERVAL_MS);
+        }
+        lock.lock();
+    }
+    readback_future_queue.push_back({target, future});
+    lock.unlock();
+    readback_cv.notify_all();
+}
+
+bool OpenXRPicoSecureMR::_process_next_future() {
+    std::shared_ptr<ReadbackTarget> target;
+    XrFutureEXT future = XR_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> lock(readback_mutex);
+        if (readback_future_queue.empty()) {
+            return false;
+        }
+        ReadbackPendingFuture pending = readback_future_queue.front();
+        readback_future_queue.pop_front();
+        target = pending.target;
+        future = pending.future;
+    }
+
+    PackedByteArray payload;
+    bool success = _complete_future_for_target(target, future, payload);
+
+    {
+        std::lock_guard<std::mutex> lock(readback_mutex);
+        if (target) {
+            target->in_flight = false;
+            const int interval = std::max(0, target->interval_ms);
+            auto now = std::chrono::steady_clock::now();
+            target->next_schedule = interval > 0 ? now + std::chrono::milliseconds(interval) : now;
+            if (success) {
+                target->latest_data = payload;
+                target->data_ready = true;
             } else {
-                job->cv.wait(lock, [job]() {
-                    return job->stop_requested || job->request_pending;
+                target->data_ready = false;
+                target->latest_data = PackedByteArray();
+            }
+        }
+    }
+
+    readback_cv.notify_all();
+    return true;
+}
+
+void OpenXRPicoSecureMR::_process_pending_futures() {
+    while (_process_next_future()) {
+        if (readback_thread_stop.load(std::memory_order_acquire)) {
+            // Drain remaining futures even if stopping; continue looping to flush queue.
+            continue;
+        }
+    }
+}
+
+void OpenXRPicoSecureMR::_readback_thread_main() {
+    std::unique_lock<std::mutex> lock(readback_mutex);
+    while (!readback_thread_stop.load(std::memory_order_acquire)) {
+        bool has_future = !readback_future_queue.empty();
+        bool has_ready = _has_ready_target_locked();
+
+        if (!has_future && !has_ready) {
+            if (readback_targets.empty()) {
+                readback_cv.wait(lock, [this]() {
+                    return readback_thread_stop.load(std::memory_order_acquire) || !readback_future_queue.empty() || _has_ready_target_locked();
                 });
                 continue;
             }
-        }
 
-        if (job->stop_requested) {
-            break;
-        }
+            auto now = std::chrono::steady_clock::now();
+            auto next_wake = std::chrono::steady_clock::time_point::max();
+            for (auto &kv : readback_targets) {
+                auto target = kv.second;
+                if (!target || !target->active || target->in_flight) {
+                    continue;
+                }
+                auto candidate = target->manual_request ? now : target->next_schedule;
+                if (candidate == std::chrono::steady_clock::time_point()) {
+                    candidate = now;
+                }
+                if (candidate < next_wake) {
+                    next_wake = candidate;
+                }
+            }
 
-        auto now = std::chrono::steady_clock::now();
-        if (job->interval_ms > 0 && job->next_allowed_time != std::chrono::steady_clock::time_point() && now < job->next_allowed_time) {
-            job->cv.wait_until(lock, job->next_allowed_time, [job]() {
-                return job->stop_requested || job->request_pending;
-            });
+            if (next_wake == std::chrono::steady_clock::time_point::max()) {
+                readback_cv.wait(lock, [this]() {
+                    return readback_thread_stop.load(std::memory_order_acquire) || !readback_future_queue.empty() || _has_ready_target_locked();
+                });
+            } else {
+                readback_cv.wait_until(lock, next_wake, [this]() {
+                    return readback_thread_stop.load(std::memory_order_acquire) || !readback_future_queue.empty() || _has_ready_target_locked();
+                });
+            }
             continue;
         }
 
-        job->request_pending = false;
-        job->busy = true;
+        std::vector<std::shared_ptr<ReadbackTarget>> to_schedule;
+        _schedule_ready_targets(to_schedule);
         lock.unlock();
 
-        PackedByteArray data;
-        if (job->wrapper != nullptr && job->tensor_handle != 0) {
-            data = job->wrapper->readback_global_tensor_cpu(job->tensor_handle);
+        for (auto &target : to_schedule) {
+            _enqueue_future_for_target(target);
         }
 
-        auto finish_time = std::chrono::steady_clock::now();
+        _process_pending_futures();
 
-        lock.lock();
-        job->latest_data = data;
-        job->data_ready = true;
-        job->busy = false;
-        if (job->interval_ms > 0) {
-            job->next_allowed_time = finish_time + std::chrono::milliseconds(job->interval_ms);
-        } else {
-            job->next_allowed_time = std::chrono::steady_clock::time_point();
-        }
-        lock.unlock();
-        job->cv.notify_all();
         lock.lock();
     }
 
-    job->busy = false;
-    job->request_pending = false;
     lock.unlock();
-    job->cv.notify_all();
+    _process_pending_futures();
+    readback_thread_running.store(false, std::memory_order_release);
 }
 
 static int32_t _oxr_securemr_encoding_from_data_type(int32_t data_type) {

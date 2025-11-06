@@ -176,6 +176,8 @@ typedef struct XrCreateTextureFromGlobalTensorCompletionPICO {
 
 namespace godot {
 
+class OpenXRPicoSecureMR;
+
 class OpenXRPicoReadbackTensorExtensionWrapper : public OpenXRExtensionWrapperExtension {
     GDCLASS(OpenXRPicoReadbackTensorExtensionWrapper, OpenXRExtensionWrapperExtension);
 
@@ -215,6 +217,8 @@ protected:
     static void _bind_methods();
 
 private:
+    friend class OpenXRPicoSecureMR;
+
     static OpenXRPicoReadbackTensorExtensionWrapper *singleton;
 
     std::map<String, bool *> request_extensions;
