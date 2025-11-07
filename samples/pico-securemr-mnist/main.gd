@@ -23,7 +23,6 @@ var _camera_permission_granted: bool = false
 var _camera_permission_requested: bool = false
 var _left_image_placeholder: int = 0
 var _left_image_global: int = 0
-var _readback_registered: bool = false
 
 @onready var world_environment: WorldEnvironment = $WorldEnvironment if has_node("WorldEnvironment") else null
 
@@ -71,9 +70,8 @@ func _on_openxr_session_begun():
 	set_process(true)
 
 func _exit_tree() -> void:
-	if securemr != null and _left_image_global != 0 and _readback_registered:
-		securemr.release_readback(_left_image_global)
-		_readback_registered = false
+	if securemr != null and _left_image_global != 0:
+		pass
 
 func enable_passthrough(enable: bool) -> void:
 	if passthrough_enabled == enable:
@@ -109,15 +107,6 @@ func _process(_delta: float) -> void:
 		return
 
 	securemr.execute_pipeline(pipeline_handle, _pipeline_bindings)
-
-	if _readback_registered and _left_image_global != 0:
-		while true:
-			var data: PackedByteArray = securemr.pop_readback(_left_image_global)
-			if data.is_empty():
-				break
-			_on_readback_result(_left_image_global, data)
-		securemr.request_readback(_left_image_global)
-
 	_last_submit_msec = now
 
 func _ensure_camera_permission() -> void:
@@ -191,27 +180,3 @@ func _try_build_pipeline() -> void:
 		}]
 
 	_pipeline_ready = true
-	if not _readback_registered and _left_image_global != 0:
-		_readback_registered = securemr.ensure_readback(_left_image_global, SUBMIT_INTERVAL_MS)
-		if _readback_registered:
-			print("[MNIST] Readback registered for global tensor %d" % _left_image_global)
-			securemr.request_readback(_left_image_global)
-		else:
-			print("[MNIST] Failed to register readback for tensor %d" % _left_image_global)
-
-func _on_readback_result(handle: int, data: PackedByteArray) -> void:
-	print("_on_readback_result start")
-	if handle != _left_image_global:
-		return
-	var expected_size := IMAGE_WIDTH * IMAGE_HEIGHT * IMAGE_CHANNELS
-	if data.size() > 0:
-		print("[MNIST][Readback] left_vst shape: %dx%dx%d bytes=%d%s" % [
-			IMAGE_HEIGHT,
-			IMAGE_WIDTH,
-			IMAGE_CHANNELS,
-			data.size(),
-			"" if data.size() == expected_size else " (expected %d)" % expected_size
-		])
-	else:
-		print("[MNIST][Readback] left_vst readback returned empty buffer.")
-	print("[MNIST] Readback pipeline ready. Placeholder=%d Global=%d" % [_left_image_placeholder, _left_image_global])
