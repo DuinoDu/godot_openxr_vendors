@@ -34,10 +34,305 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <utility>
+#include <vector>
+
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 
 using namespace godot;
 
+namespace {
+const std::chrono::milliseconds kDefaultReadbackIntervalMs(33);
+} // namespace
+
+struct OpenXRPicoSecureMR::TensorReadbackWorker {
+    struct Target {
+        uint64_t tensor = 0;
+        String name;
+        std::vector<int32_t> dimensions;
+        int32_t channels = 0;
+        int32_t data_type = XR_SECURE_MR_TENSOR_DATA_TYPE_MAX_ENUM_PICO;
+    };
+
+    struct TargetState {
+        Target target;
+        bool in_flight = false;
+    };
+
+    struct PendingFuture {
+        TargetState *state = nullptr;
+        XrFutureEXT future = XR_NULL_HANDLE;
+    };
+
+    struct Result {
+        String name;
+        uint64_t tensor = 0;
+        std::vector<uint8_t> data;
+        std::vector<int32_t> dimensions;
+        int32_t channels = 0;
+        int32_t data_type = XR_SECURE_MR_TENSOR_DATA_TYPE_MAX_ENUM_PICO;
+        XrResult future_result = XR_SUCCESS;
+    };
+
+    TensorReadbackWorker(OpenXRPicoReadbackTensorExtensionWrapper *in_wrapper, std::vector<Target> targets, int32_t polling_interval_ms) :
+            readback_wrapper(in_wrapper) {
+        if (polling_interval_ms <= 0) {
+            polling_interval_ms = 1;
+        }
+        polling_interval = std::chrono::milliseconds(polling_interval_ms);
+        targets_.reserve(targets.size());
+        for (auto &target : targets) {
+            if (target.tensor == 0) {
+                continue;
+            }
+            TargetState state;
+            state.target = std::move(target);
+            state.in_flight = false;
+            targets_.push_back(std::move(state));
+        }
+    }
+
+    ~TensorReadbackWorker() {
+        stop();
+    }
+
+    void start() {
+        if (targets_.empty() || readback_wrapper == nullptr) {
+            return;
+        }
+        bool expected = false;
+        if (!running.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        worker = std::thread(&TensorReadbackWorker::loop, this);
+    }
+
+    void stop() {
+        bool was_running = running.exchange(false);
+        if (!was_running) {
+            return;
+        }
+        state_cv.notify_all();
+        if (worker.joinable()) {
+            worker.join();
+        }
+        pending_futures.clear();
+        for (auto &state : targets_) {
+            state.in_flight = false;
+        }
+    }
+
+    bool is_running() const {
+        return running.load(std::memory_order_acquire);
+    }
+
+    std::vector<Result> pop_results() {
+        std::lock_guard<std::mutex> lock(results_mutex);
+        std::vector<Result> out;
+        out.swap(completed_results);
+        return out;
+    }
+
+private:
+    void loop() {
+        auto next_schedule = std::chrono::steady_clock::now();
+        while (running.load(std::memory_order_acquire)) {
+            if (pending_futures.empty()) {
+                auto now = std::chrono::steady_clock::now();
+                if (now < next_schedule) {
+                    std::unique_lock<std::mutex> lock(state_mutex);
+                    state_cv.wait_until(lock, next_schedule, [this]() { return !running.load(std::memory_order_acquire); });
+                    continue;
+                }
+            }
+
+            if (!running.load(std::memory_order_acquire)) {
+                break;
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            if (now >= next_schedule) {
+                schedule_futures();
+                next_schedule = std::chrono::steady_clock::now() + polling_interval;
+            }
+
+            while (running.load(std::memory_order_acquire) && process_single_future()) {
+            }
+        }
+
+        pending_futures.clear();
+        for (auto &state : targets_) {
+            state.in_flight = false;
+        }
+    }
+
+    void schedule_futures() {
+        for (auto &state : targets_) {
+            if (!running.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (state.in_flight) {
+                continue;
+            }
+
+            while (pending_futures.size() >= kMaxQueueDepth && running.load(std::memory_order_acquire)) {
+                if (!process_single_future()) {
+                    break;
+                }
+            }
+
+            if (pending_futures.size() >= kMaxQueueDepth) {
+                break;
+            }
+
+            enqueue_future(state);
+        }
+    }
+
+    bool enqueue_future(TargetState &state) {
+        if (state.in_flight || state.target.tensor == 0 || readback_wrapper == nullptr) {
+            return false;
+        }
+
+        XrSecureMrTensorPICO tensor_handle = (XrSecureMrTensorPICO)state.target.tensor;
+        XrFutureEXT future = XR_NULL_HANDLE;
+        XrResult result = readback_wrapper->xrCreateBufferFromGlobalTensorAsyncPICO(tensor_handle, &future);
+        if (XR_FAILED(result) || future == XR_NULL_HANDLE) {
+            UtilityFunctions::printerr("[SecureMRReadback] xrCreateBufferFromGlobalTensorAsyncPICO failed for ", state.target.name, " (result=", (int)result, ")");
+            return false;
+        }
+
+        PendingFuture pending;
+        pending.state = &state;
+        pending.future = future;
+        pending_futures.push_back(pending);
+        state.in_flight = true;
+        return true;
+    }
+
+    bool process_single_future() {
+        if (pending_futures.empty()) {
+            return false;
+        }
+
+        PendingFuture pending = pending_futures.front();
+        pending_futures.pop_front();
+
+        if (pending.state == nullptr) {
+            return true;
+        }
+
+        if (!running.load(std::memory_order_acquire)) {
+            pending.state->in_flight = false;
+            return false;
+        }
+
+        if (pending.state->target.tensor == 0 || pending.future == XR_NULL_HANDLE) {
+            pending.state->in_flight = false;
+            return true;
+        }
+
+        process_future(*pending.state, pending.future);
+        pending.state->in_flight = false;
+        return true;
+    }
+
+    bool wait_completion(const TargetState &state, XrSecureMrTensorPICO tensor_handle, XrFutureEXT future,
+            XrReadbackTensorBufferPICO &buffer, XrCreateBufferFromGlobalTensorCompletionPICO &completion) {
+        if (readback_wrapper == nullptr) {
+            return false;
+        }
+
+        XrResult last_result = XR_SUCCESS;
+        while (running.load(std::memory_order_acquire)) {
+            completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
+            completion.next = nullptr;
+            completion.futureResult = XR_SUCCESS;
+            completion.tensorBuffer = &buffer;
+
+            while (running.load(std::memory_order_acquire)) {
+                last_result = readback_wrapper->xrCreateBufferFromGlobalTensorCompletePICO(tensor_handle, future, &completion);
+                if (last_result == XR_SUCCESS) {
+                    return true;
+                }
+                if (last_result != XR_ERROR_FUTURE_PENDING_EXT) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+
+            UtilityFunctions::printerr("[SecureMRReadback] xrCreateBufferFromGlobalTensorCompletePICO retry for ", state.target.name,
+                    " (result=", (int)last_result, ")");
+        }
+
+        return false;
+    }
+
+    void process_future(TargetState &state, XrFutureEXT future) {
+        XrSecureMrTensorPICO tensor_handle = (XrSecureMrTensorPICO)state.target.tensor;
+
+        XrReadbackTensorBufferPICO buffer = {};
+        buffer.bufferCapacityInput = 0;
+        buffer.bufferSizeOutput = 0;
+        buffer.buffer = nullptr;
+
+        XrCreateBufferFromGlobalTensorCompletionPICO completion = {};
+        completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
+        completion.next = nullptr;
+        completion.futureResult = XR_SUCCESS;
+        completion.tensorBuffer = &buffer;
+
+        if (!wait_completion(state, tensor_handle, future, buffer, completion)) {
+            return;
+        }
+
+        buffer.bufferCapacityInput = buffer.bufferSizeOutput;
+        std::vector<uint8_t> payload(buffer.bufferCapacityInput);
+        if (!payload.empty()) {
+            buffer.buffer = payload.data();
+        }
+
+        if (!wait_completion(state, tensor_handle, future, buffer, completion)) {
+            return;
+        }
+
+        store_result(state, std::move(payload), completion.futureResult);
+    }
+
+    void store_result(const TargetState &state, std::vector<uint8_t> &&payload, XrResult future_result) {
+        Result result;
+        result.name = state.target.name;
+        result.tensor = state.target.tensor;
+        result.data = std::move(payload);
+        result.dimensions = state.target.dimensions;
+        result.channels = state.target.channels;
+        result.data_type = state.target.data_type;
+        result.future_result = future_result;
+
+        std::lock_guard<std::mutex> lock(results_mutex);
+        completed_results.push_back(std::move(result));
+    }
+
+    static constexpr size_t kMaxQueueDepth = 100;
+
+    OpenXRPicoReadbackTensorExtensionWrapper *readback_wrapper = nullptr;
+    std::vector<TargetState> targets_;
+    std::chrono::milliseconds polling_interval = kDefaultReadbackIntervalMs;
+    std::atomic<bool> running{false};
+    std::thread worker;
+    std::deque<PendingFuture> pending_futures;
+    std::mutex state_mutex;
+    std::condition_variable state_cv;
+    std::mutex results_mutex;
+    std::vector<Result> completed_results;
+};
 OpenXRPicoSecureMR *OpenXRPicoSecureMR::singleton = nullptr;
 
 OpenXRPicoSecureMR *OpenXRPicoSecureMR::get_singleton() {
@@ -50,10 +345,12 @@ OpenXRPicoSecureMR *OpenXRPicoSecureMR::get_singleton() {
 OpenXRPicoSecureMR::OpenXRPicoSecureMR() {
     ERR_FAIL_COND_MSG(singleton != nullptr, "An OpenXRPicoSecureMR singleton already exists.");
     wrapper = OpenXRPicoSecureMRExtensionWrapper::get_singleton();
+    readback_wrapper = OpenXRPicoReadbackTensorExtensionWrapper::get_singleton();
     singleton = this;
 }
 
 OpenXRPicoSecureMR::~OpenXRPicoSecureMR() {
+    _stop_all_tensor_readbacks();
     singleton = nullptr;
 }
 
@@ -162,6 +459,160 @@ void OpenXRPicoSecureMR::set_operator_output_by_index(uint64_t pipeline_handle, 
 void OpenXRPicoSecureMR::execute_pipeline(uint64_t pipeline_handle, const Array &mappings) {
     if (!wrapper) return;
     wrapper->execute_pipeline(pipeline_handle, mappings);
+}
+
+uint64_t OpenXRPicoSecureMR::start_tensor_readback(const Array &targets, int32_t polling_interval_ms) {
+    if (targets.is_empty()) {
+        UtilityFunctions::printerr("[SecureMRReadback] start_tensor_readback called with no targets.");
+        return 0;
+    }
+
+    if (readback_wrapper == nullptr) {
+        readback_wrapper = OpenXRPicoReadbackTensorExtensionWrapper::get_singleton();
+    }
+
+    if (readback_wrapper == nullptr || !readback_wrapper->is_readback_supported()) {
+        UtilityFunctions::printerr("[SecureMRReadback] Pico readback tensor extension not available.");
+        return 0;
+    }
+
+    std::vector<TensorReadbackWorker::Target> parsed_targets;
+    parsed_targets.reserve(targets.size());
+
+    for (int i = 0; i < targets.size(); i++) {
+        Variant entry = targets[i];
+        if (entry.get_type() != Variant::DICTIONARY) {
+            UtilityFunctions::printerr("[SecureMRReadback] Target at index ", i, " must be a Dictionary.");
+            continue;
+        }
+
+        Dictionary dict = entry;
+        Variant handle_var = dict.get("global_tensor", Variant());
+        if (handle_var.get_type() == Variant::NIL) {
+            handle_var = dict.get("global", Variant());
+        }
+        if (handle_var.get_type() == Variant::NIL) {
+            handle_var = dict.get("tensor", Variant());
+        }
+
+        uint64_t tensor_handle = 0;
+        if (handle_var.get_type() == Variant::INT) {
+            tensor_handle = (uint64_t)(int64_t)handle_var;
+        }
+        if (tensor_handle == 0) {
+            UtilityFunctions::printerr("[SecureMRReadback] Target at index ", i, " is missing a valid global tensor handle.");
+            continue;
+        }
+
+        TensorReadbackWorker::Target target;
+        target.tensor = tensor_handle;
+        target.name = dict.get("name", String("tensor_") + String::num_int64((int64_t)tensor_handle));
+
+        PackedInt32Array dims_array = dict.get("dimensions", PackedInt32Array());
+        target.dimensions.resize(dims_array.size());
+        for (int j = 0; j < dims_array.size(); j++) {
+            target.dimensions[j] = dims_array[j];
+        }
+
+        target.channels = (int32_t)(int64_t)dict.get("channels", (int64_t)0);
+        target.data_type = (int32_t)(int64_t)dict.get("data_type", (int64_t)XR_SECURE_MR_TENSOR_DATA_TYPE_MAX_ENUM_PICO);
+
+        parsed_targets.push_back(std::move(target));
+    }
+
+    if (parsed_targets.empty()) {
+        UtilityFunctions::printerr("[SecureMRReadback] No valid readback targets supplied.");
+        return 0;
+    }
+
+    if (polling_interval_ms <= 0) {
+        polling_interval_ms = (int32_t)kDefaultReadbackIntervalMs.count();
+    }
+
+    std::shared_ptr<TensorReadbackWorker> worker = std::make_shared<TensorReadbackWorker>(readback_wrapper, std::move(parsed_targets), polling_interval_ms);
+    worker->start();
+    if (!worker->is_running()) {
+        UtilityFunctions::printerr("[SecureMRReadback] Failed to start readback worker thread.");
+        return 0;
+    }
+
+    uint64_t handle = 0;
+    {
+        std::lock_guard<std::mutex> lock(readback_workers_mutex);
+        handle = readback_handle_counter++;
+        readback_workers[handle] = worker;
+    }
+    return handle;
+}
+
+void OpenXRPicoSecureMR::stop_tensor_readback(uint64_t readback_handle) {
+    if (readback_handle == 0) {
+        return;
+    }
+
+    std::shared_ptr<TensorReadbackWorker> worker;
+    {
+        std::lock_guard<std::mutex> lock(readback_workers_mutex);
+        auto it = readback_workers.find(readback_handle);
+        if (it == readback_workers.end()) {
+            return;
+        }
+        worker = it->second;
+        readback_workers.erase(it);
+    }
+
+    if (worker) {
+        worker->stop();
+    }
+}
+
+Array OpenXRPicoSecureMR::poll_tensor_readback(uint64_t readback_handle) {
+    Array out;
+    if (readback_handle == 0) {
+        return out;
+    }
+
+    std::shared_ptr<TensorReadbackWorker> worker;
+    {
+        std::lock_guard<std::mutex> lock(readback_workers_mutex);
+        auto it = readback_workers.find(readback_handle);
+        if (it == readback_workers.end()) {
+            return out;
+        }
+        worker = it->second;
+    }
+
+    if (!worker) {
+        return out;
+    }
+
+    std::vector<TensorReadbackWorker::Result> results = worker->pop_results();
+    for (auto &result : results) {
+        Dictionary entry;
+        entry["name"] = result.name;
+        entry["global_tensor"] = (uint64_t)result.tensor;
+
+        PackedByteArray payload;
+        if (!result.data.empty()) {
+            payload.resize(result.data.size());
+            memcpy(payload.ptrw(), result.data.data(), result.data.size());
+        }
+        entry["data"] = payload;
+
+        PackedInt32Array dims;
+        dims.resize(result.dimensions.size());
+        for (int i = 0; i < dims.size(); i++) {
+            dims.set(i, result.dimensions[i]);
+        }
+        entry["dimensions"] = dims;
+        entry["channels"] = result.channels;
+        entry["data_type"] = result.data_type;
+        entry["future_result"] = (int32_t)result.future_result;
+
+        out.append(entry);
+    }
+
+    return out;
 }
 
 void OpenXRPicoSecureMR::set_named_input(uint64_t pipeline_handle, uint64_t operator_handle, uint64_t tensor_handle, const char *name) {
@@ -685,6 +1136,24 @@ void OpenXRPicoSecureMR::_release_pipeline_buffers(uint64_t pipeline_handle) {
     pipeline_model_buffers.erase(key);
 }
 
+void OpenXRPicoSecureMR::_stop_all_tensor_readbacks() {
+    std::vector<std::shared_ptr<TensorReadbackWorker>> workers;
+    {
+        std::lock_guard<std::mutex> lock(readback_workers_mutex);
+        workers.reserve(readback_workers.size());
+        for (auto &entry : readback_workers) {
+            workers.push_back(entry.second);
+        }
+        readback_workers.clear();
+    }
+
+    for (auto &worker : workers) {
+        if (worker) {
+            worker->stop();
+        }
+    }
+}
+
 void OpenXRPicoSecureMR::_bind_methods() {
     // Static singleton accessor for GDScript (ClassName.get_singleton()).
     ClassDB::bind_static_method("OpenXRPicoSecureMR", D_METHOD("get_singleton"), &OpenXRPicoSecureMR::get_singleton);
@@ -717,6 +1186,9 @@ void OpenXRPicoSecureMR::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_operator_output_by_index", "pipeline_handle", "operator_handle", "pipeline_tensor_handle", "index"), &OpenXRPicoSecureMR::set_operator_output_by_index);
 
     ClassDB::bind_method(D_METHOD("execute_pipeline", "pipeline_handle", "mappings"), &OpenXRPicoSecureMR::execute_pipeline);
+    ClassDB::bind_method(D_METHOD("start_tensor_readback", "targets", "polling_interval_ms"), &OpenXRPicoSecureMR::start_tensor_readback, DEFVAL(33));
+    ClassDB::bind_method(D_METHOD("stop_tensor_readback", "readback_handle"), &OpenXRPicoSecureMR::stop_tensor_readback);
+    ClassDB::bind_method(D_METHOD("poll_tensor_readback", "readback_handle"), &OpenXRPicoSecureMR::poll_tensor_readback);
 
     // Convenience ops
     ClassDB::bind_method(D_METHOD("op_camera_access", "pipeline_handle", "left_image_tensor", "right_image_tensor", "timestamp_tensor", "camera_matrix_tensor"), &OpenXRPicoSecureMR::op_camera_access);

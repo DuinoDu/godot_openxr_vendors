@@ -39,6 +39,11 @@
 
 #include <openxr/openxr.h>
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
+#include "extensions/openxr_pico_readback_tensor_extension_wrapper.h"
+
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 namespace godot {
 
@@ -93,6 +98,11 @@ public:
 
     // Execute
     void execute_pipeline(uint64_t pipeline_handle, const Array &mappings);
+
+    // Tensor readback (asynchronous polling, modeled after SecureMR utils).
+    uint64_t start_tensor_readback(const Array &targets, int32_t polling_interval_ms = 33);
+    void stop_tensor_readback(uint64_t readback_handle);
+    Array poll_tensor_readback(uint64_t readback_handle);
 
     // Convenience wrappers mirroring common SecureMR utils:
     // Camera access: outputs any of the provided placeholders
@@ -150,10 +160,17 @@ protected:
 private:
     static OpenXRPicoSecureMR *singleton;
     OpenXRPicoSecureMRExtensionWrapper *wrapper = nullptr;
+    OpenXRPicoReadbackTensorExtensionWrapper *readback_wrapper = nullptr;
     Dictionary pipeline_model_buffers;
+
+    struct TensorReadbackWorker;
+    uint64_t readback_handle_counter = 1;
+    std::mutex readback_workers_mutex;
+    std::unordered_map<uint64_t, std::shared_ptr<TensorReadbackWorker>> readback_workers;
 
     PackedByteArray _retain_pipeline_buffer(uint64_t pipeline_handle, const PackedByteArray &buffer);
     void _release_pipeline_buffers(uint64_t pipeline_handle);
+    void _stop_all_tensor_readbacks();
     void set_named_input(uint64_t pipeline_handle, uint64_t operator_handle, uint64_t tensor_handle, const char *name);
     void set_named_output(uint64_t pipeline_handle, uint64_t operator_handle, uint64_t tensor_handle, const char *name);
     void do_elementwise(uint64_t pipeline_handle, int32_t op_type, uint64_t a_tensor, uint64_t b_tensor, uint64_t result_tensor);

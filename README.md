@@ -122,6 +122,10 @@ You can instead create multiple export templates, one for each vendor.
 When contributing to the source code for the plugin, we highly recommend you install clang-format and copy the contents of the `hooks` folder into the folder `.git/hooks/`.
 This will ensure clang-format is run on any changed files before commiting the changes to github and prevent disappointment when formatting issues prevent changes from being merged.
 
+## Contributor guide
+
+For a concise overview of the repository layout, build/test commands, coding standards, and pull-request etiquette, see [AGENTS.md](AGENTS.md).
+
 ## License
 
 Unless specified otherwise, sources in this repository are licensed under MIT, see `LICENSE` for more information.

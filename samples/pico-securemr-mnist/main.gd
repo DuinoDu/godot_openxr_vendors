@@ -1,6 +1,7 @@
 extends Node3D
 
 const SUBMIT_INTERVAL_MS := 33
+const READBACK_LOG_INTERVAL_MS := 1000
 const CAMERA_PERMISSION := "android.permission.CAMERA"
 const IMAGE_WIDTH := 512
 const IMAGE_HEIGHT := 512
@@ -18,6 +19,8 @@ var global_tensors: Dictionary = {}
 var _pipeline_bindings: Array = []
 var _pipeline_ready: bool = false
 var _last_submit_msec: int = 0
+var readback_handle: int = 0
+var _last_readback_log_msec: int = 0
 var passthrough_enabled: bool = false
 var _camera_permission_granted: bool = false
 var _camera_permission_requested: bool = false
@@ -70,8 +73,9 @@ func _on_openxr_session_begun():
 	set_process(true)
 
 func _exit_tree() -> void:
-	if securemr != null and _left_image_global != 0:
-		pass
+	if securemr != null and readback_handle != 0:
+		securemr.stop_tensor_readback(readback_handle)
+		readback_handle = 0
 
 func enable_passthrough(enable: bool) -> void:
 	if passthrough_enabled == enable:
@@ -107,6 +111,7 @@ func _process(_delta: float) -> void:
 		return
 
 	securemr.execute_pipeline(pipeline_handle, _pipeline_bindings)
+	_poll_readback_results()
 	_last_submit_msec = now
 
 func _ensure_camera_permission() -> void:
@@ -180,3 +185,38 @@ func _try_build_pipeline() -> void:
 		}]
 
 	_pipeline_ready = true
+	_ensure_readback_worker()
+
+func _ensure_readback_worker() -> void:
+	if readback_handle != 0 or securemr == null or _left_image_global == 0:
+		return
+	var targets := [{
+		"global_tensor": _left_image_global,
+		"name": "vst_output_left_u8",
+		"dimensions": PackedInt32Array([IMAGE_HEIGHT, IMAGE_WIDTH]),
+		"channels": IMAGE_CHANNELS,
+		"data_type": TENSOR_DATA_TYPE_UINT8,
+	}]
+	readback_handle = securemr.start_tensor_readback(targets, SUBMIT_INTERVAL_MS)
+	if readback_handle == 0:
+		print("[MNIST] Failed to start SecureMR readback worker.")
+	else:
+		print("[MNIST] SecureMR readback worker started (handle=%d)." % readback_handle)
+
+func _poll_readback_results() -> void:
+	if securemr == null or readback_handle == 0:
+		return
+	var results: Array = securemr.poll_tensor_readback(readback_handle)
+	if results.is_empty():
+		return
+	for result in results:
+		var future_status: int = result.get("future_result", 1)
+		var tensor_name: String = result.get("name", "unnamed")
+		if future_status != 0:
+			print("[MNIST] Readback future for %s failed with status %d" % [tensor_name, future_status])
+			continue
+		var payload: PackedByteArray = result.get("data", PackedByteArray())
+		if payload.is_empty():
+			continue
+		var dims: PackedInt32Array = result.get("dimensions", PackedInt32Array())
+		print("[MNIST] Readback %s produced %d bytes (dims=%s)" % [tensor_name, payload.size(), dims])
