@@ -34,11 +34,13 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -50,6 +52,24 @@ using namespace godot;
 
 namespace {
 const std::chrono::milliseconds kDefaultReadbackIntervalMs(33);
+
+size_t _tensor_data_type_stride(int32_t data_type) {
+    switch (data_type) {
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT8_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT8_PICO:
+            return 1;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT16_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT16_PICO:
+            return 2;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT32_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT32_PICO:
+            return 4;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT64_PICO:
+            return 8;
+        default:
+            return 0;
+    }
+}
 } // namespace
 
 struct OpenXRPicoSecureMR::TensorReadbackWorker {
@@ -59,6 +79,25 @@ struct OpenXRPicoSecureMR::TensorReadbackWorker {
         std::vector<int32_t> dimensions;
         int32_t channels = 0;
         int32_t data_type = XR_SECURE_MR_TENSOR_DATA_TYPE_MAX_ENUM_PICO;
+
+        size_t estimate_payload_size() const {
+            const size_t stride = _tensor_data_type_stride(data_type);
+            if (stride == 0) {
+                return 0;
+            }
+            size_t total = stride * static_cast<size_t>(std::max(1, channels));
+            for (int32_t dim : dimensions) {
+                if (dim <= 0) {
+                    return 0;
+                }
+                const size_t dim_size = static_cast<size_t>(dim);
+                if (total > std::numeric_limits<size_t>::max() / dim_size) {
+                    return 0;
+                }
+                total *= dim_size;
+            }
+            return total;
+        }
     };
 
     struct TargetState {
@@ -144,6 +183,7 @@ private:
     void loop() {
         auto next_schedule = std::chrono::steady_clock::now();
         while (running.load(std::memory_order_acquire)) {
+            UtilityFunctions::print("[SecureMRReadback] loop once start");
             if (pending_futures.empty()) {
                 auto now = std::chrono::steady_clock::now();
                 if (now < next_schedule) {
@@ -152,19 +192,23 @@ private:
                     continue;
                 }
             }
+            UtilityFunctions::print("[SecureMRReadback] loop once 1");
 
             if (!running.load(std::memory_order_acquire)) {
                 break;
             }
+            UtilityFunctions::print("[SecureMRReadback] loop once 2");
 
             auto now = std::chrono::steady_clock::now();
             if (now >= next_schedule) {
                 schedule_futures();
                 next_schedule = std::chrono::steady_clock::now() + polling_interval;
             }
+            UtilityFunctions::print("[SecureMRReadback] loop once 3");
 
             while (running.load(std::memory_order_acquire) && process_single_future()) {
             }
+            UtilityFunctions::print("[SecureMRReadback] loop once end");
         }
 
         pending_futures.clear();
@@ -174,6 +218,7 @@ private:
     }
 
     void schedule_futures() {
+        UtilityFunctions::print("[SecureMRReadback] schedule_futures start");
         for (auto &state : targets_) {
             if (!running.load(std::memory_order_acquire)) {
                 return;
@@ -194,9 +239,11 @@ private:
 
             enqueue_future(state);
         }
+        UtilityFunctions::print("[SecureMRReadback] schedule_futures end");
     }
 
     bool enqueue_future(TargetState &state) {
+        UtilityFunctions::print("[SecureMRReadback] enqueue_future start");
         if (state.in_flight || state.target.tensor == 0 || readback_wrapper == nullptr) {
             return false;
         }
@@ -214,10 +261,12 @@ private:
         pending.future = future;
         pending_futures.push_back(pending);
         state.in_flight = true;
+        UtilityFunctions::print("[SecureMRReadback] enqueue_future end");
         return true;
     }
 
     bool process_single_future() {
+        UtilityFunctions::print("[SecureMRReadback] process_single_future start");
         if (pending_futures.empty()) {
             return false;
         }
@@ -241,16 +290,16 @@ private:
 
         process_future(*pending.state, pending.future);
         pending.state->in_flight = false;
+        UtilityFunctions::print("[SecureMRReadback] process_single_future end");
         return true;
     }
 
     bool wait_completion(const TargetState &state, XrSecureMrTensorPICO tensor_handle, XrFutureEXT future,
             XrReadbackTensorBufferPICO &buffer, XrCreateBufferFromGlobalTensorCompletionPICO &completion) {
         if (readback_wrapper == nullptr) {
-            return false;
+            return XR_ERROR_RUNTIME_FAILURE;
         }
-
-        XrResult last_result = XR_SUCCESS;
+        XrResult last_result;
         while (running.load(std::memory_order_acquire)) {
             completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
             completion.next = nullptr;
@@ -259,29 +308,43 @@ private:
 
             while (running.load(std::memory_order_acquire)) {
                 last_result = readback_wrapper->xrCreateBufferFromGlobalTensorCompletePICO(tensor_handle, future, &completion);
-                if (last_result == XR_SUCCESS) {
+                // if (last_result == XR_SUCCESS) {
+                if (last_result == -1) {
                     return true;
                 }
-                if (last_result != XR_ERROR_FUTURE_PENDING_EXT) {
-                    break;
-                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+                UtilityFunctions::push_warning(
+                    "[SecureMRReadback] xrCreateBufferFromGlobalTensorCompletePICO failed for ",
+                    state.target.name, " (result=", (int)last_result, ")");
             }
 
-            UtilityFunctions::printerr("[SecureMRReadback] xrCreateBufferFromGlobalTensorCompletePICO retry for ", state.target.name,
-                    " (result=", (int)last_result, ")");
+            UtilityFunctions::push_warning(
+                "[SecureMRReadback] xrCreateBufferFromGlobalTensorCompletePICO failed for ",
+                state.target.name, " (result=", (int)last_result, ")");
         }
-
         return false;
     }
 
     void process_future(TargetState &state, XrFutureEXT future) {
+        UtilityFunctions::print("[SecureMRReadback] process_future start");
         XrSecureMrTensorPICO tensor_handle = (XrSecureMrTensorPICO)state.target.tensor;
 
         XrReadbackTensorBufferPICO buffer = {};
-        buffer.bufferCapacityInput = 0;
+        size_t payload_capacity = state.target.estimate_payload_size();
+        if (payload_capacity == 0) {
+            UtilityFunctions::printerr("[SecureMRReadback] Unable to determine payload size for ", state.target.name, ". Skipping readback.");
+            return;
+        }
+        if (payload_capacity > std::numeric_limits<uint32_t>::max()) {
+            UtilityFunctions::printerr("[SecureMRReadback] Payload for ", state.target.name, " exceeds supported buffer size.");
+            return;
+        }
+
+        buffer.bufferCapacityInput = static_cast<uint32_t>(payload_capacity);
         buffer.bufferSizeOutput = 0;
-        buffer.buffer = nullptr;
+        std::vector<uint8_t> payload(payload_capacity);
+        buffer.buffer = payload.empty() ? nullptr : payload.data();
 
         XrCreateBufferFromGlobalTensorCompletionPICO completion = {};
         completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
@@ -289,24 +352,40 @@ private:
         completion.futureResult = XR_SUCCESS;
         completion.tensorBuffer = &buffer;
 
-        if (!wait_completion(state, tensor_handle, future, buffer, completion)) {
-            return;
-        }
-
-        buffer.bufferCapacityInput = buffer.bufferSizeOutput;
-        std::vector<uint8_t> payload(buffer.bufferCapacityInput);
-        if (!payload.empty()) {
+        UtilityFunctions::print("[SecureMRReadback] wait_completion_1 start");
+        bool completion_result = wait_completion(state, tensor_handle, future, buffer, completion);
+        UtilityFunctions::print("[SecureMRReadback] wait_completion_1 end");
+        if (completion_result) {
+            const size_t required_size = buffer.bufferSizeOutput;
+            if (required_size == 0 || required_size > std::numeric_limits<uint32_t>::max()) {
+                UtilityFunctions::printerr("[SecureMRReadback] Invalid buffer size reported for ", state.target.name, ".");
+                return;
+            }
+            payload.resize(required_size);
+            buffer.bufferCapacityInput = static_cast<uint32_t>(required_size);
             buffer.buffer = payload.data();
+            UtilityFunctions::print("[SecureMRReadback] wait_completion_2 start");
+            completion_result = wait_completion(state, tensor_handle, future, buffer, completion);
+            UtilityFunctions::print("[SecureMRReadback] wait_completion_2 end");
         }
 
-        if (!wait_completion(state, tensor_handle, future, buffer, completion)) {
+        if (!completion_result) {
             return;
         }
+
+        if (buffer.bufferSizeOutput > buffer.bufferCapacityInput) {
+            UtilityFunctions::printerr("[SecureMRReadback] Runtime wrote more bytes than reserved for ", state.target.name, ".");
+            return;
+        }
+
+        payload.resize(buffer.bufferSizeOutput);
 
         store_result(state, std::move(payload), completion.futureResult);
+        UtilityFunctions::print("[SecureMRReadback] process_future end");
     }
 
     void store_result(const TargetState &state, std::vector<uint8_t> &&payload, XrResult future_result) {
+        UtilityFunctions::print("[SecureMRReadback] store_result start");
         Result result;
         result.name = state.target.name;
         result.tensor = state.target.tensor;
@@ -318,6 +397,7 @@ private:
 
         std::lock_guard<std::mutex> lock(results_mutex);
         completed_results.push_back(std::move(result));
+        UtilityFunctions::print("[SecureMRReadback] store_result end");
     }
 
     static constexpr size_t kMaxQueueDepth = 100;
@@ -595,7 +675,9 @@ Array OpenXRPicoSecureMR::poll_tensor_readback(uint64_t readback_handle) {
         PackedByteArray payload;
         if (!result.data.empty()) {
             payload.resize(result.data.size());
+            UtilityFunctions::print("[SecureMRReadback] memcpy start");
             memcpy(payload.ptrw(), result.data.data(), result.data.size());
+            UtilityFunctions::print("[SecureMRReadback] memcpy end");
         }
         entry["data"] = payload;
 

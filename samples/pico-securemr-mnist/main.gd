@@ -3,8 +3,8 @@ extends Node3D
 const SUBMIT_INTERVAL_MS := 33
 const READBACK_LOG_INTERVAL_MS := 1000
 const CAMERA_PERMISSION := "android.permission.CAMERA"
-const IMAGE_WIDTH := 512
-const IMAGE_HEIGHT := 512
+const IMAGE_WIDTH := 3248 # Matches rectified VST width in mnist_pipeline.json
+const IMAGE_HEIGHT := 2464 # Matches rectified VST height in mnist_pipeline.json
 const IMAGE_CHANNELS := 3
 const TENSOR_DATA_TYPE_UINT8 := 1
 const TENSOR_TYPE_MAT := 6
