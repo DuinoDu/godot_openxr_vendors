@@ -38,6 +38,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 
 #include <openxr/openxr.h>
+#include <openxr/openxr_platform.h>
 
 #include "util.h"
 
@@ -60,119 +61,124 @@
 #endif
 #endif // ANDROID_ENABLED
 
-// Some Pico readback types may not be present in the shipped headers.
-// Define minimal shims if missing so we can still compile and fetch procs.
-#ifndef XR_EXT_FUTURE_EXTENSION_NAME
-#define XR_EXT_FUTURE_EXTENSION_NAME "XR_EXT_future"
-#endif
+// // Some Pico readback types may not be present in the shipped headers.
+// // Define minimal shims if missing so we can still compile and fetch procs.
+// #ifndef XR_EXT_FUTURE_EXTENSION_NAME
+// #define XR_EXT_FUTURE_EXTENSION_NAME "XR_EXT_future"
+// #endif
+// 
+// #ifndef XR_PICO_READBACK_TENSOR_EXTENSION_NAME
+// #define XR_PICO_readback_tensor 1
+// #define XR_PICO_READBACK_TENSOR_EXTENSION_NAME "XR_PICO_readback_tensor"
+// 
+// #ifndef XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO
+// #define XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO ((XrStructureType)1010027001)
+// #endif
+// #ifndef XR_TYPE_CREATE_TEXTURE_FROM_GLOBAL_TENSOR_COMPLETION_PICO
+// #define XR_TYPE_CREATE_TEXTURE_FROM_GLOBAL_TENSOR_COMPLETION_PICO ((XrStructureType)1010027002)
+// #endif
+// #ifndef XR_TYPE_READBACK_TENSOR_BUFFER_PICO
+// #define XR_TYPE_READBACK_TENSOR_BUFFER_PICO ((XrStructureType)1010027003)
+// #endif
+// 
+// // Readback buffer structs (CPU path)
+// typedef struct XrReadbackTensorBufferPICO {
+//     XrStructureType type;
+//     const void *next;
+//     uint32_t bufferCapacityInput; // bytes available in buffer
+//     uint32_t bufferSizeOutput;    // bytes written by runtime
+//     void *buffer;                 // pointer to CPU buffer
+// } XrReadbackTensorBufferPICO;
+// 
+// #ifndef XrCreateBufferFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO
+// #define XrCreateBufferFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO 1
+// typedef struct XrCreateBufferFromGlobalTensorCompletionPICO {
+//     XrStructureType type;
+//     const void *next;
+//     XrResult futureResult;
+//     XrReadbackTensorBufferPICO *tensorBuffer;
+// } XrCreateBufferFromGlobalTensorCompletionPICO;
+// #endif
+// 
+// // Function pointer typedefs (CPU path)
+// #ifndef PFN_xrCreateBufferFromGlobalTensorAsyncPICO
+// typedef XrResult(XRAPI_PTR *PFN_xrCreateBufferFromGlobalTensorAsyncPICO)(XrSecureMrTensorPICO tensor, XrFutureEXT *future);
+// typedef XrResult(XRAPI_PTR *PFN_xrCreateBufferFromGlobalTensorCompletePICO)(XrSecureMrTensorPICO tensor, XrFutureEXT future, XrCreateBufferFromGlobalTensorCompletionPICO *completion);
+// #endif
+// 
+// #endif // XR_PICO_READBACK_TENSOR_EXTENSION_NAME
 
-#ifndef XR_PICO_READBACK_TENSOR_EXTENSION_NAME
-#define XR_PICO_readback_tensor 1
-#define XR_PICO_READBACK_TENSOR_EXTENSION_NAME "XR_PICO_readback_tensor"
+// #ifndef XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME
+// #define XR_PICO_readback_tensor_vulkan 1
+// #define XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME "XR_PICO_readback_tensor_vulkan"
+// // Ensure VkImage type exists even if Vulkan headers are not included.
+// #if !defined(XR_USE_GRAPHICS_API_VULKAN)
+// typedef uint64_t VkImage;
+// #endif
+// #ifndef XR_TYPE_READBACK_TEXTURE_IMAGE_VULKAN_PICO
+// #define XR_TYPE_READBACK_TEXTURE_IMAGE_VULKAN_PICO ((XrStructureType)1010028000)
+// #endif
+// typedef struct XrReadbackTextureImageVulkanPICO {
+//     XrStructureType type;
+//     const void *next;
+//     VkImage image; // External image handle
+// } XrReadbackTextureImageVulkanPICO;
+// #endif
+// 
+// #ifndef XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME
+// #define XR_PICO_readback_tensor_opengles 1
+// #define XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME "XR_PICO_readback_tensor_opengles"
+// #ifndef XR_TYPE_READBACK_TEXTURE_IMAGE_OPENGL_PICO
+// #define XR_TYPE_READBACK_TEXTURE_IMAGE_OPENGL_PICO ((XrStructureType)1010029000)
+// #endif
+// typedef struct XrReadbackTextureImageOpenGLPICO {
+//     XrStructureType type;
+//     const void *next;
+//     uint32_t texId; // GL texture id
+// } XrReadbackTextureImageOpenGLPICO;
+// #endif
+// 
+// #ifndef XR_TYPE_FUTURE_POLL_INFO_EXT
+// #define XR_TYPE_FUTURE_POLL_INFO_EXT ((XrStructureType)1000469001)
+// #endif
+// #ifndef XR_TYPE_FUTURE_POLL_RESULT_EXT
+// #define XR_TYPE_FUTURE_POLL_RESULT_EXT ((XrStructureType)1000469003)
+// #endif
+// 
+// // Common GPU base type and handle
+// #ifndef XrReadbackTextureImageBasePICO_DEFINED_GODOT_PICO
+// #define XrReadbackTextureImageBasePICO_DEFINED_GODOT_PICO 1
+// typedef struct XrReadbackTextureImageBasePICO {
+//     XrStructureType type;
+//     const void *next;
+// } XrReadbackTextureImageBasePICO;
+// #endif
 
-#ifndef XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO
-#define XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO ((XrStructureType)1010027001)
-#endif
-#ifndef XR_TYPE_CREATE_TEXTURE_FROM_GLOBAL_TENSOR_COMPLETION_PICO
-#define XR_TYPE_CREATE_TEXTURE_FROM_GLOBAL_TENSOR_COMPLETION_PICO ((XrStructureType)1010027002)
-#endif
+// #ifndef XR_DEFINE_HANDLE
+// // Fallback if not defined by headers.
+// typedef struct XrReadbackTexturePICO_T *XrReadbackTexturePICO;
+// #else
+// XR_DEFINE_HANDLE(XrReadbackTexturePICO)
+// #endif
 
-// Readback buffer structs (CPU path)
-typedef struct XrReadbackTensorBufferPICO {
-    uint32_t bufferCapacityInput; // bytes available in buffer
-    uint32_t bufferSizeOutput;    // bytes written by runtime
-    void *buffer;                 // pointer to CPU buffer
-} XrReadbackTensorBufferPICO;
+// // Function pointer typedefs (GPU path)
+// #ifndef PFN_xrCreateTextureFromGlobalTensorAsyncPICO
+// typedef XrResult(XRAPI_PTR *PFN_xrCreateTextureFromGlobalTensorAsyncPICO)(XrSecureMrTensorPICO tensor, XrFutureEXT *future);
+// typedef XrResult(XRAPI_PTR *PFN_xrCreateTextureFromGlobalTensorCompletePICO)(XrSecureMrTensorPICO tensor, XrFutureEXT future, struct XrCreateTextureFromGlobalTensorCompletionPICO *completion);
+// typedef XrResult(XRAPI_PTR *PFN_xrGetReadbackTextureImagePICO)(XrReadbackTexturePICO readbackTexture, XrReadbackTextureImageBasePICO *img);
+// typedef XrResult(XRAPI_PTR *PFN_xrReleaseReadbackTexturePICO)(XrReadbackTexturePICO readbackTexture);
+// #endif
 
-#ifndef XrCreateBufferFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO
-#define XrCreateBufferFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO 1
-typedef struct XrCreateBufferFromGlobalTensorCompletionPICO {
-    XrStructureType type;
-    const void *next;
-    XrResult futureResult;
-    XrReadbackTensorBufferPICO *tensorBuffer;
-} XrCreateBufferFromGlobalTensorCompletionPICO;
-#endif
-
-// Function pointer typedefs (CPU path)
-#ifndef PFN_xrCreateBufferFromGlobalTensorAsyncPICO
-typedef XrResult(XRAPI_PTR *PFN_xrCreateBufferFromGlobalTensorAsyncPICO)(XrSecureMrTensorPICO tensor, XrFutureEXT *future);
-typedef XrResult(XRAPI_PTR *PFN_xrCreateBufferFromGlobalTensorCompletePICO)(XrSecureMrTensorPICO tensor, XrFutureEXT future, XrCreateBufferFromGlobalTensorCompletionPICO *completion);
-#endif
-
-#endif // XR_PICO_READBACK_TENSOR_EXTENSION_NAME
-
-#ifndef XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME
-#define XR_PICO_readback_tensor_vulkan 1
-#define XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME "XR_PICO_readback_tensor_vulkan"
-// Ensure VkImage type exists even if Vulkan headers are not included.
-#if !defined(XR_USE_GRAPHICS_API_VULKAN)
-typedef uint64_t VkImage;
-#endif
-#ifndef XR_TYPE_READBACK_TEXTURE_IMAGE_VULKAN_PICO
-#define XR_TYPE_READBACK_TEXTURE_IMAGE_VULKAN_PICO ((XrStructureType)1010028000)
-#endif
-typedef struct XrReadbackTextureImageVulkanPICO {
-    XrStructureType type;
-    const void *next;
-    VkImage image; // External image handle
-} XrReadbackTextureImageVulkanPICO;
-#endif
-
-#ifndef XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME
-#define XR_PICO_readback_tensor_opengles 1
-#define XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME "XR_PICO_readback_tensor_opengles"
-#ifndef XR_TYPE_READBACK_TEXTURE_IMAGE_OPENGL_PICO
-#define XR_TYPE_READBACK_TEXTURE_IMAGE_OPENGL_PICO ((XrStructureType)1010029000)
-#endif
-typedef struct XrReadbackTextureImageOpenGLPICO {
-    XrStructureType type;
-    const void *next;
-    uint32_t texId; // GL texture id
-} XrReadbackTextureImageOpenGLPICO;
-#endif
-
-#ifndef XR_TYPE_FUTURE_POLL_INFO_EXT
-#define XR_TYPE_FUTURE_POLL_INFO_EXT ((XrStructureType)1000469001)
-#endif
-#ifndef XR_TYPE_FUTURE_POLL_RESULT_EXT
-#define XR_TYPE_FUTURE_POLL_RESULT_EXT ((XrStructureType)1000469003)
-#endif
-
-// Common GPU base type and handle
-#ifndef XrReadbackTextureImageBasePICO_DEFINED_GODOT_PICO
-#define XrReadbackTextureImageBasePICO_DEFINED_GODOT_PICO 1
-typedef struct XrReadbackTextureImageBasePICO {
-    XrStructureType type;
-    const void *next;
-} XrReadbackTextureImageBasePICO;
-#endif
-
-#ifndef XR_DEFINE_HANDLE
-// Fallback if not defined by headers.
-typedef struct XrReadbackTexturePICO_T *XrReadbackTexturePICO;
-#else
-XR_DEFINE_HANDLE(XrReadbackTexturePICO)
-#endif
-
-// Function pointer typedefs (GPU path)
-#ifndef PFN_xrCreateTextureFromGlobalTensorAsyncPICO
-typedef XrResult(XRAPI_PTR *PFN_xrCreateTextureFromGlobalTensorAsyncPICO)(XrSecureMrTensorPICO tensor, XrFutureEXT *future);
-typedef XrResult(XRAPI_PTR *PFN_xrCreateTextureFromGlobalTensorCompletePICO)(XrSecureMrTensorPICO tensor, XrFutureEXT future, struct XrCreateTextureFromGlobalTensorCompletionPICO *completion);
-typedef XrResult(XRAPI_PTR *PFN_xrGetReadbackTextureImagePICO)(XrReadbackTexturePICO readbackTexture, XrReadbackTextureImageBasePICO *img);
-typedef XrResult(XRAPI_PTR *PFN_xrReleaseReadbackTexturePICO)(XrReadbackTexturePICO readbackTexture);
-#endif
-
-// Completion struct (GPU path)
-#ifndef XrCreateTextureFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO
-#define XrCreateTextureFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO 1
-typedef struct XrCreateTextureFromGlobalTensorCompletionPICO {
-    XrStructureType type;
-    const void *next;
-    XrResult futureResult;
-    XrReadbackTexturePICO texture;
-} XrCreateTextureFromGlobalTensorCompletionPICO;
-#endif
+// // Completion struct (GPU path)
+// #ifndef XrCreateTextureFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO
+// #define XrCreateTextureFromGlobalTensorCompletionPICO_DEFINED_GODOT_PICO 1
+// typedef struct XrCreateTextureFromGlobalTensorCompletionPICO {
+//     XrStructureType type;
+//     const void *next;
+//     XrResult futureResult;
+//     XrReadbackTexturePICO texture;
+// } XrCreateTextureFromGlobalTensorCompletionPICO;
+// #endif
 
 namespace godot {
 

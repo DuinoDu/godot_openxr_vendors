@@ -84,7 +84,7 @@ struct OpenXRPicoSecureMR::TensorReadbackWorker {
     TensorReadbackWorker(OpenXRPicoReadbackTensorExtensionWrapper *in_wrapper, std::vector<Target> targets, int32_t polling_interval_ms) :
             readback_wrapper(in_wrapper) {
         if (polling_interval_ms <= 0) {
-            polling_interval_ms = 1;
+            polling_interval_ms = (int32_t)kDefaultReadbackIntervalMs.count();
         }
         polling_interval = std::chrono::milliseconds(polling_interval_ms);
         targets_.reserve(targets.size());
@@ -222,7 +222,7 @@ private:
             return false;
         }
 
-        PendingFuture pending = pending_futures.front();
+        PendingFuture pending = std::move(pending_futures.front());
         pending_futures.pop_front();
 
         if (pending.state == nullptr) {
@@ -250,40 +250,37 @@ private:
             return false;
         }
 
-        XrResult last_result = XR_SUCCESS;
-        while (running.load(std::memory_order_acquire)) {
+        XrResult result;
+        while (true) {
+            completion = {};
             completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
             completion.next = nullptr;
             completion.futureResult = XR_SUCCESS;
             completion.tensorBuffer = &buffer;
-
             while (running.load(std::memory_order_acquire)) {
-                last_result = readback_wrapper->xrCreateBufferFromGlobalTensorCompletePICO(tensor_handle, future, &completion);
-                if (last_result == XR_SUCCESS) {
+                result = readback_wrapper->xrCreateBufferFromGlobalTensorCompletePICO(tensor_handle, future, &completion);
+                if (result == XR_SUCCESS) {
                     return true;
-                }
-                if (last_result != XR_ERROR_FUTURE_PENDING_EXT) {
-                    break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
-
-            UtilityFunctions::printerr("[SecureMRReadback] xrCreateBufferFromGlobalTensorCompletePICO retry for ", state.target.name,
-                    " (result=", (int)last_result, ")");
+            UtilityFunctions::printerr("[SecureMRReadback] xrCreateBufferFromGlobalTensorCompletePICO failed for ",
+                    state.target.name, " (result=", (int)result, ")");
         }
-
         return false;
     }
 
     void process_future(TargetState &state, XrFutureEXT future) {
         XrSecureMrTensorPICO tensor_handle = (XrSecureMrTensorPICO)state.target.tensor;
 
-        XrReadbackTensorBufferPICO buffer = {};
+        XrReadbackTensorBufferPICO buffer{};
+        buffer.type = XR_TYPE_READBACK_TENSOR_BUFFER_PICO;
+        buffer.next = nullptr;
         buffer.bufferCapacityInput = 0;
         buffer.bufferSizeOutput = 0;
         buffer.buffer = nullptr;
 
-        XrCreateBufferFromGlobalTensorCompletionPICO completion = {};
+        XrCreateBufferFromGlobalTensorCompletionPICO completion{};
         completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
         completion.next = nullptr;
         completion.futureResult = XR_SUCCESS;
@@ -1173,7 +1170,6 @@ void OpenXRPicoSecureMR::_bind_methods() {
     ClassDB::bind_method(D_METHOD("reset_pipeline_tensor_bytes", "pipeline_handle", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_pipeline_tensor_bytes);
     ClassDB::bind_method(D_METHOD("reset_pipeline_tensor_floats", "pipeline_handle", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_pipeline_tensor_floats);
 
-
     ClassDB::bind_method(D_METHOD("create_operator_basic", "pipeline_handle", "operator_type"), &OpenXRPicoSecureMR::create_operator_basic);
     ClassDB::bind_method(D_METHOD("create_operator_arithmetic", "pipeline_handle", "config_text"), &OpenXRPicoSecureMR::create_operator_arithmetic);
     ClassDB::bind_method(D_METHOD("create_operator_convert_color", "pipeline_handle", "convert_code"), &OpenXRPicoSecureMR::create_operator_convert_color);
@@ -1186,6 +1182,8 @@ void OpenXRPicoSecureMR::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_operator_output_by_index", "pipeline_handle", "operator_handle", "pipeline_tensor_handle", "index"), &OpenXRPicoSecureMR::set_operator_output_by_index);
 
     ClassDB::bind_method(D_METHOD("execute_pipeline", "pipeline_handle", "mappings"), &OpenXRPicoSecureMR::execute_pipeline);
+
+    // readback
     ClassDB::bind_method(D_METHOD("start_tensor_readback", "targets", "polling_interval_ms"), &OpenXRPicoSecureMR::start_tensor_readback, DEFVAL(33));
     ClassDB::bind_method(D_METHOD("stop_tensor_readback", "readback_handle"), &OpenXRPicoSecureMR::stop_tensor_readback);
     ClassDB::bind_method(D_METHOD("poll_tensor_readback", "readback_handle"), &OpenXRPicoSecureMR::poll_tensor_readback);

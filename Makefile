@@ -1,5 +1,8 @@
 .PHONY: build
 
+clean:
+	./gradlew clean
+
 build:
 	./gradlew buildPlugin -PusePicoOpenxrLoader=true
 	@rm -rf samples/pico-securemr-mnist/addons/godotopenxrvendors

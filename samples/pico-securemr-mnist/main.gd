@@ -3,8 +3,8 @@ extends Node3D
 const SUBMIT_INTERVAL_MS := 33
 const READBACK_LOG_INTERVAL_MS := 1000
 const CAMERA_PERMISSION := "android.permission.CAMERA"
-const IMAGE_WIDTH := 512
-const IMAGE_HEIGHT := 512
+const IMAGE_WIDTH := 3248 # Matches Pico VST left camera width to avoid buffer overruns
+const IMAGE_HEIGHT := 2464 # Matches Pico VST left camera height to avoid buffer overruns
 const IMAGE_CHANNELS := 3
 const TENSOR_DATA_TYPE_UINT8 := 1
 const TENSOR_TYPE_MAT := 6
@@ -20,12 +20,13 @@ var _pipeline_bindings: Array = []
 var _pipeline_ready: bool = false
 var _last_submit_msec: int = 0
 var readback_handle: int = 0
-var _last_readback_log_msec: int = 0
 var passthrough_enabled: bool = false
 var _camera_permission_granted: bool = false
 var _camera_permission_requested: bool = false
 var _left_image_placeholder: int = 0
 var _left_image_global: int = 0
+var _right_image_placeholder: int = 0
+var _right_image_global: int = 0
 
 @onready var world_environment: WorldEnvironment = $WorldEnvironment if has_node("WorldEnvironment") else null
 
@@ -161,28 +162,47 @@ func _try_build_pipeline() -> void:
 			return
 		print("[MNIST] SecureMR pipeline created (handle=%d)." % pipeline_handle)
 
+	var dims := PackedInt32Array([IMAGE_HEIGHT, IMAGE_WIDTH])
 	if _left_image_placeholder == 0:
-		var dims := PackedInt32Array([IMAGE_HEIGHT, IMAGE_WIDTH])
 		_left_image_placeholder = securemr.create_pipeline_tensor_shape(pipeline_handle, dims, TENSOR_DATA_TYPE_UINT8, IMAGE_CHANNELS, TENSOR_TYPE_MAT, true)
 		if _left_image_placeholder == 0:
-			print("[MNIST] Failed to create pipeline tensor placeholder for VST image.")
+			print("[MNIST] Failed to create pipeline tensor placeholder for left VST image.")
+			return
+
+	if _right_image_placeholder == 0:
+		_right_image_placeholder = securemr.create_pipeline_tensor_shape(pipeline_handle, dims, TENSOR_DATA_TYPE_UINT8, IMAGE_CHANNELS, TENSOR_TYPE_MAT, true)
+		if _right_image_placeholder == 0:
+			print("[MNIST] Failed to create pipeline tensor placeholder for right VST image.")
 			return
 
 	if _left_image_global == 0:
-		var dims := PackedInt32Array([IMAGE_HEIGHT, IMAGE_WIDTH])
 		_left_image_global = securemr.create_global_tensor_shape(fw, dims, TENSOR_DATA_TYPE_UINT8, IMAGE_CHANNELS, TENSOR_TYPE_MAT, false)
 		if _left_image_global == 0:
-			print("[MNIST] Failed to create global tensor for VST image.")
+			print("[MNIST] Failed to create global tensor for left VST image.")
 			return
 		global_tensors["left_vst"] = _left_image_global
 
+	if _right_image_global == 0:
+		_right_image_global = securemr.create_global_tensor_shape(fw, dims, TENSOR_DATA_TYPE_UINT8, IMAGE_CHANNELS, TENSOR_TYPE_MAT, false)
+		if _right_image_global == 0:
+			print("[MNIST] Failed to create global tensor for right VST image.")
+			return
+		global_tensors["right_vst"] = _right_image_global
+
 	if _pipeline_bindings.is_empty():
-		securemr.op_camera_access(pipeline_handle, _left_image_placeholder, 0, 0, 0)
+		securemr.op_camera_access(pipeline_handle, _left_image_placeholder, _right_image_placeholder, 0, 0)
 		tensors_map["left_vst_placeholder"] = _left_image_placeholder
-		_pipeline_bindings = [{
-			"local": _left_image_placeholder,
-			"global": _left_image_global,
-		}]
+		tensors_map["right_vst_placeholder"] = _right_image_placeholder
+		_pipeline_bindings = [
+			{
+				"local": _left_image_placeholder,
+				"global": _left_image_global,
+			},
+			{
+				"local": _right_image_placeholder,
+				"global": _right_image_global,
+			},
+		]
 
 	_pipeline_ready = true
 	_ensure_readback_worker()
@@ -210,13 +230,10 @@ func _poll_readback_results() -> void:
 	if results.is_empty():
 		return
 	for result in results:
-		var future_status: int = result.get("future_result", 1)
 		var tensor_name: String = result.get("name", "unnamed")
-		if future_status != 0:
-			print("[MNIST] Readback future for %s failed with status %d" % [tensor_name, future_status])
-			continue
 		var payload: PackedByteArray = result.get("data", PackedByteArray())
 		if payload.is_empty():
+			print("[MNIST] Readback future for %s failed with empty payload" % [tensor_name])
 			continue
 		var dims: PackedInt32Array = result.get("dimensions", PackedInt32Array())
 		print("[MNIST] Readback %s produced %d bytes (dims=%s)" % [tensor_name, payload.size(), dims])

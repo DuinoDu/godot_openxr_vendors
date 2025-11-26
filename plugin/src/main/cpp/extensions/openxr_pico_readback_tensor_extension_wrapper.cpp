@@ -40,6 +40,18 @@
 
 using namespace godot;
 
+#if defined(XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME) && defined(XR_TYPE_READBACK_TEXTURE_IMAGE_VULKAN_PICO)
+#define PICO_READBACK_VULKAN_AVAILABLE 1
+#else
+#define PICO_READBACK_VULKAN_AVAILABLE 0
+#endif
+
+#if defined(XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME) && defined(XR_TYPE_READBACK_TEXTURE_IMAGE_OPENGL_PICO)
+#define PICO_READBACK_OPENGLES_AVAILABLE 1
+#else
+#define PICO_READBACK_OPENGLES_AVAILABLE 0
+#endif
+
 OpenXRPicoReadbackTensorExtensionWrapper *OpenXRPicoReadbackTensorExtensionWrapper::singleton = nullptr;
 
 OpenXRPicoReadbackTensorExtensionWrapper *OpenXRPicoReadbackTensorExtensionWrapper::get_singleton() {
@@ -57,21 +69,25 @@ OpenXRPicoReadbackTensorExtensionWrapper::OpenXRPicoReadbackTensorExtensionWrapp
 
     // GPU readback extension depends on active rendering backend.
     GraphicsAPI api = _detect_graphics_api();
-    if (api == GRAPHICS_API_VULKAN) {
+    if (api == GRAPHICS_API_VULKAN && PICO_READBACK_VULKAN_AVAILABLE) {
+#if PICO_READBACK_VULKAN_AVAILABLE
         request_extensions[XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME] = &readback_vulkan_ext;
-    } else if (api == GRAPHICS_API_OPENGL) {
+#endif
+    } else if (api == GRAPHICS_API_OPENGL && PICO_READBACK_OPENGLES_AVAILABLE) {
+#if PICO_READBACK_OPENGLES_AVAILABLE
         request_extensions[XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME] = &readback_opengles_ext;
+#endif
     }
 
-    UtilityFunctions::print("[PicoReadback] Wrapper constructed. Requesting extensions: ",
-            String(
-                XR_PICO_READBACK_TENSOR_EXTENSION_NAME) + String(
-                ", ") + String(
-                XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME) + String(
-                ", ") + String(
-                XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME) + String(
-                ", ") + String(
-                XR_EXT_FUTURE_EXTENSION_NAME));
+    String requested = String(XR_PICO_READBACK_TENSOR_EXTENSION_NAME);
+#if PICO_READBACK_VULKAN_AVAILABLE
+    requested += String(", ") + String(XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME);
+#endif
+#if PICO_READBACK_OPENGLES_AVAILABLE
+    requested += String(", ") + String(XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME);
+#endif
+    requested += String(", ") + String(XR_EXT_FUTURE_EXTENSION_NAME);
+    UtilityFunctions::print("[PicoReadback] Wrapper constructed. Requesting extensions: ", requested);
 
     singleton = this;
 }
@@ -190,6 +206,9 @@ PackedByteArray OpenXRPicoReadbackTensorExtensionWrapper::readback_global_tensor
 
 PackedByteArray OpenXRPicoReadbackTensorExtensionWrapper::readback_global_tensor_gpu(uint64_t global_tensor_handle, int32_t width, int32_t height, int32_t channels) {
     PackedByteArray out;
+#if !(PICO_READBACK_VULKAN_AVAILABLE || PICO_READBACK_OPENGLES_AVAILABLE)
+    ERR_FAIL_V_MSG(out, "Pico readback GPU extension headers not available in this SDK");
+#else
     ERR_FAIL_COND_V_MSG(!(readback_vulkan_ext || readback_opengles_ext), out, "Pico readback GPU extension not available");
     ERR_FAIL_COND_V_MSG(xrCreateTextureFromGlobalTensorAsyncPICO_ptr == nullptr || xrCreateTextureFromGlobalTensorCompletePICO_ptr == nullptr || xrGetReadbackTextureImagePICO_ptr == nullptr || xrReleaseReadbackTexturePICO_ptr == nullptr, out, "Readback GPU functions not loaded");
 
@@ -251,6 +270,8 @@ PackedByteArray OpenXRPicoReadbackTensorExtensionWrapper::readback_global_tensor
     PackedByteArray pixels;
 
     GraphicsAPI api = _detect_graphics_api();
+    bool handled = false;
+#if PICO_READBACK_VULKAN_AVAILABLE
     if (api == GRAPHICS_API_VULKAN) {
         XrReadbackTextureImageVulkanPICO vkimg = {};
         vkimg.type = XR_TYPE_READBACK_TEXTURE_IMAGE_VULKAN_PICO;
@@ -269,7 +290,11 @@ PackedByteArray OpenXRPicoReadbackTensorExtensionWrapper::readback_global_tensor
                 1);
             pixels = rd->texture_get_data(rd_tex, 0);
         }
-    } else if (api == GRAPHICS_API_OPENGL) {
+        handled = true;
+    }
+#endif
+#if PICO_READBACK_OPENGLES_AVAILABLE
+    if (!handled && api == GRAPHICS_API_OPENGL) {
         XrReadbackTextureImageOpenGLPICO glimg = {};
         glimg.type = XR_TYPE_READBACK_TEXTURE_IMAGE_OPENGL_PICO;
         glimg.next = nullptr;
@@ -287,7 +312,9 @@ PackedByteArray OpenXRPicoReadbackTensorExtensionWrapper::readback_global_tensor
                 1);
             pixels = rd->texture_get_data(rd_tex, 0);
         }
+        handled = true;
     }
+#endif
 
     xrReleaseReadbackTexturePICO(completion.texture);
 
@@ -297,6 +324,7 @@ PackedByteArray OpenXRPicoReadbackTensorExtensionWrapper::readback_global_tensor
     }
 
     return pixels;
+#endif
 }
 
 bool OpenXRPicoReadbackTensorExtensionWrapper::_wait_for_future_ready(XrFutureEXT future, uint64_t timeout_us) const {
@@ -348,8 +376,16 @@ bool OpenXRPicoReadbackTensorExtensionWrapper::_wait_for_future_ready(XrFutureEX
 Dictionary OpenXRPicoReadbackTensorExtensionWrapper::debug_info() {
     Dictionary d;
     d["requested_cpu_ext"] = String(XR_PICO_READBACK_TENSOR_EXTENSION_NAME);
+#if PICO_READBACK_VULKAN_AVAILABLE
     d["requested_vulkan_ext"] = String(XR_PICO_READBACK_TENSOR_VULKAN_EXTENSION_NAME);
+#else
+    d["requested_vulkan_ext"] = String();
+#endif
+#if PICO_READBACK_OPENGLES_AVAILABLE
     d["requested_gles_ext"] = String(XR_PICO_READBACK_TENSOR_OPENGLES_EXTENSION_NAME);
+#else
+    d["requested_gles_ext"] = String();
+#endif
     d["cpu_enabled"] = readback_cpu_ext;
     d["vulkan_enabled"] = readback_vulkan_ext;
     d["gles_enabled"] = readback_opengles_ext;
