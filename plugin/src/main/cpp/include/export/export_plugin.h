@@ -40,7 +40,7 @@
 
 using namespace godot;
 
-static const char *PLUGIN_VERSION = "4.2.0-dev"; // Also update 'config.gradle#defaultVersion'
+static const char *PLUGIN_VERSION = "4.3.0-dev"; // Also update 'config.gradle#defaultVersion'
 
 // Set of supported vendors
 static const char *META_VENDOR_NAME = "meta";
@@ -48,6 +48,7 @@ static const char *PICO_VENDOR_NAME = "pico";
 static const char *LYNX_VENDOR_NAME = "lynx";
 static const char *KHRONOS_VENDOR_NAME = "khronos";
 static const char *MAGICLEAP_VENDOR_NAME = "magicleap";
+static const char *ANDROID_XR_VENDOR_NAME = "androidxr";
 
 static const char *VENDORS_LIST[] = {
 	META_VENDOR_NAME,
@@ -55,6 +56,7 @@ static const char *VENDORS_LIST[] = {
 	LYNX_VENDOR_NAME,
 	KHRONOS_VENDOR_NAME,
 	MAGICLEAP_VENDOR_NAME,
+	ANDROID_XR_VENDOR_NAME,
 };
 
 // Set of custom feature tags supported by the plugin
@@ -114,8 +116,6 @@ protected:
 
 	bool _is_hybrid_app_enabled() const;
 	OpenXRHybridApp::HybridMode _get_hybrid_app_launch_mode() const;
-
-	String _get_opening_activity_tag_for_panel_app() const;
 
 	String _get_common_activity_intent_filter_contents() const;
 

@@ -38,7 +38,9 @@
 #include <godot_cpp/godot.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include "editor/xr_project_setup_dialog.h"
 #include "editor_plugin.h"
+#include "export/android_xr_export_plugin.h"
 #include "export/export_plugin.h"
 #include "export/khronos_export_plugin.h"
 #include "export/lynx_export_plugin.h"
@@ -46,6 +48,8 @@
 #include "export/meta_export_plugin.h"
 #include "export/pico_export_plugin.h"
 
+#include "extensions/openxr_android_passthrough_camera_state_extension_wrapper.h"
+#include "extensions/openxr_android_performance_metrics_extension_wrapper.h"
 #include "extensions/openxr_fb_android_surface_swapchain_create_extension_wrapper.h"
 #include "extensions/openxr_fb_body_tracking_extension_wrapper.h"
 #include "extensions/openxr_fb_color_space_extension_wrapper.h"
@@ -79,9 +83,13 @@
 #include "extensions/openxr_meta_recommended_layer_resolution_extension_wrapper.h"
 #include "extensions/openxr_meta_simultaneous_hands_and_controllers_extension_wrapper.h"
 #include "extensions/openxr_meta_spatial_entity_mesh_extension_wrapper.h"
+<<<<<<< HEAD
 #include "extensions/openxr_pico_secure_mr_extension_wrapper.h"
 #include "extensions/openxr_pico_readback_tensor_extension_wrapper.h"
 #include "classes/openxr_pico_secure_mr.h"
+=======
+#include "extensions/openxr_ml_marker_understanding_extension_wrapper.h"
+>>>>>>> 2c3c4b413ec0e679589e99876fd5cb175820e54e
 
 #include "classes/openxr_fb_hand_tracking_mesh.h"
 #include "classes/openxr_fb_passthrough_geometry.h"
@@ -95,6 +103,17 @@
 #include "classes/openxr_hybrid_app.h"
 #include "classes/openxr_meta_environment_depth.h"
 #include "classes/openxr_meta_passthrough_color_lut.h"
+#include "classes/openxr_ml_marker_detector.h"
+#include "classes/openxr_ml_marker_detector_april_tag_settings.h"
+#include "classes/openxr_ml_marker_detector_aruco_settings.h"
+#include "classes/openxr_ml_marker_detector_code_128_settings.h"
+#include "classes/openxr_ml_marker_detector_ean_13_settings.h"
+#include "classes/openxr_ml_marker_detector_profile_settings.h"
+#include "classes/openxr_ml_marker_detector_qr_settings.h"
+#include "classes/openxr_ml_marker_detector_settings.h"
+#include "classes/openxr_ml_marker_detector_upc_a_settings.h"
+#include "classes/openxr_ml_marker_tracker.h"
+#include "classes/openxr_ml_marker_understanding_manager.h"
 #include "classes/openxr_vendor_performance_metrics.h"
 #include "classes/openxr_vendor_performance_metrics_provider.h"
 
@@ -152,6 +171,8 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			GDREGISTER_CLASS(OpenXRVendorPerformanceMetrics);
 			GDREGISTER_CLASS(OpenXRMetaPerformanceMetricsExtensionWrapper);
 
+			GDREGISTER_CLASS(OpenXRAndroidPassthroughCameraStateExtensionWrapper);
+			GDREGISTER_CLASS(OpenXRAndroidPerformanceMetricsExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRFbPassthroughExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRFbRenderModelExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRFbColorSpaceExtensionWrapper);
@@ -181,9 +202,13 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			GDREGISTER_CLASS(OpenXRFbAndroidSurfaceSwapchainCreateExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRHtcFacialTrackingExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRHtcPassthroughExtensionWrapper);
+<<<<<<< HEAD
 			GDREGISTER_CLASS(OpenXRPicoSecureMRExtensionWrapper);
 			GDREGISTER_CLASS(OpenXRPicoReadbackTensorExtensionWrapper);
             GDREGISTER_CLASS(OpenXRPicoSecureMR);
+=======
+			GDREGISTER_CLASS(OpenXRMlMarkerUnderstandingExtensionWrapper);
+>>>>>>> 2c3c4b413ec0e679589e99876fd5cb175820e54e
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED
@@ -244,6 +269,7 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 
 			if (_get_bool_project_setting("xr/openxr/extensions/vendor_performance_metrics")) {
 				_register_extension_with_openxr(OpenXRMetaPerformanceMetricsExtensionWrapper::get_singleton());
+				_register_extension_with_openxr(OpenXRAndroidPerformanceMetricsExtensionWrapper::get_singleton());
 			}
 
 			// All of the hand tracking extensions depend on the Godot hand tracking setting being set first.
@@ -289,6 +315,7 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 				_register_extension_with_openxr(OpenXRHtcPassthroughExtensionWrapper::get_singleton());
 			}
 
+<<<<<<< HEAD
 			// Pico SecureMR
 			{
 				bool pico_securemr = _get_bool_project_setting("xr/openxr/extensions/pico/secure_mixed_reality");
@@ -303,6 +330,14 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 				if (pico_readback) {
 					_register_extension_with_openxr(OpenXRPicoReadbackTensorExtensionWrapper::get_singleton());
 				}
+=======
+			if (_get_bool_project_setting("xr/openxr/extensions/magic_leap/marker_understanding")) {
+				_register_extension_with_openxr(OpenXRMlMarkerUnderstandingExtensionWrapper::get_singleton());
+			}
+
+			if (_get_bool_project_setting("xr/openxr/extensions/androidxr/passthrough_camera_state")) {
+				_register_extension_with_openxr(OpenXRAndroidPassthroughCameraStateExtensionWrapper::get_singleton());
+>>>>>>> 2c3c4b413ec0e679589e99876fd5cb175820e54e
 			}
 
 			// Only works with Godot 4.5 or later.
@@ -341,7 +376,12 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			_register_extension_as_singleton(OpenXRHtcFacialTrackingExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRPicoReadbackTensorExtensionWrapper::get_singleton());
 			_register_extension_as_singleton(OpenXRHtcPassthroughExtensionWrapper::get_singleton());
+<<<<<<< HEAD
 			_register_extension_as_singleton(OpenXRPicoSecureMRExtensionWrapper::get_singleton());
+=======
+			_register_extension_as_singleton(OpenXRMlMarkerUnderstandingExtensionWrapper::get_singleton());
+			_register_extension_as_singleton(OpenXRAndroidPassthroughCameraStateExtensionWrapper::get_singleton());
+>>>>>>> 2c3c4b413ec0e679589e99876fd5cb175820e54e
 
 // @todo GH Issue 304: Remove check for meta headers when feature becomes part of OpenXR spec.
 #ifdef META_HEADERS_ENABLED
@@ -358,6 +398,18 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			GDREGISTER_CLASS(OpenXRFbSpatialEntityUser);
 			GDREGISTER_CLASS(OpenXRFbPassthroughGeometry);
 			GDREGISTER_CLASS(OpenXRMetaPassthroughColorLut);
+
+			GDREGISTER_CLASS(OpenXRMlMarkerTracker);
+			GDREGISTER_CLASS(OpenXRMlMarkerDetector);
+			GDREGISTER_ABSTRACT_CLASS(OpenXRMlMarkerDetectorSettings);
+			GDREGISTER_CLASS(OpenXRMlMarkerDetectorProfileSettings);
+			GDREGISTER_CLASS(OpenXRMlMarkerDetectorAprilTagSettings);
+			GDREGISTER_CLASS(OpenXRMlMarkerDetectorArucoSettings);
+			GDREGISTER_CLASS(OpenXRMlMarkerDetectorCode128Settings)
+			GDREGISTER_CLASS(OpenXRMlMarkerDetectorEan13Settings);
+			GDREGISTER_CLASS(OpenXRMlMarkerDetectorQrSettings);
+			GDREGISTER_CLASS(OpenXRMlMarkerDetectorUpcASettings);
+			GDREGISTER_CLASS(OpenXRMlMarkerUnderstandingManager);
 
 			GDREGISTER_CLASS(OpenXRHybridApp);
 			Engine::get_singleton()->register_singleton("OpenXRHybridApp", OpenXRHybridApp::get_singleton());
@@ -377,6 +429,9 @@ void initialize_plugin_module(ModuleInitializationLevel p_level) {
 			GDREGISTER_INTERNAL_CLASS(OpenXRVendorsEditorPlugin);
 			GDREGISTER_INTERNAL_CLASS(OpenXRVendorsEditorExportPlugin);
 
+			GDREGISTER_INTERNAL_CLASS(XrProjectSetupDialog);
+
+			GDREGISTER_INTERNAL_CLASS(AndroidXREditorExportPlugin);
 			GDREGISTER_INTERNAL_CLASS(KhronosEditorExportPlugin);
 			GDREGISTER_INTERNAL_CLASS(LynxEditorExportPlugin);
 			GDREGISTER_INTERNAL_CLASS(MagicleapEditorExportPlugin);
@@ -496,6 +551,10 @@ void add_plugin_project_settings() {
 	// Pico
 	_add_bool_project_setting(project_settings, "xr/openxr/extensions/pico/secure_mixed_reality", false);
 	_add_bool_project_setting(project_settings, "xr/openxr/extensions/pico/readback_tensor", false);
+
+	_add_bool_project_setting(project_settings, "xr/openxr/extensions/magic_leap/marker_understanding", false);
+
+	_add_bool_project_setting(project_settings, "xr/openxr/extensions/androidxr/passthrough_camera_state", false);
 
 	// Only works with Godot 4.5 or later.
 	if (godot::internal::godot_version.minor >= 5) {

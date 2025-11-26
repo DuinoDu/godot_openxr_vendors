@@ -33,20 +33,40 @@
 #include <godot_cpp/classes/editor_plugin.hpp>
 
 using namespace godot;
+class XrProjectSetupDialog;
+
+namespace godot {
+class LineEdit;
+}
 
 class OpenXRVendorsEditorPlugin : public EditorPlugin {
 	GDCLASS(OpenXRVendorsEditorPlugin, EditorPlugin)
 
+	static OpenXRVendorsEditorPlugin *singleton;
+
 	Vector<Ref<EditorExportPlugin>> export_plugins;
 
+	XrProjectSetupDialog *_xr_project_setup_dialog = nullptr;
+
 	void _add_export_plugin(const Ref<EditorExportPlugin> &p_plugin);
+
+	void _open_project_setup();
 
 protected:
 	static void _bind_methods();
 
+	void _notification(uint32_t p_what);
+
 public:
-	void _enter_tree() override;
-	void _exit_tree() override;
+	static OpenXRVendorsEditorPlugin *get_singleton();
+
+	void open_asset_library(const String &p_filter_string);
+	void _on_asset_library_request_completed(int p_result, int p_response_code, const PackedStringArray &p_headers, const PackedByteArray &p_body, LineEdit *p_asset_library_filter, String p_search_string);
+
+	void open_project_settings(const String &p_filter_string);
+
+	void open_export_dialog();
 
 	OpenXRVendorsEditorPlugin();
+	~OpenXRVendorsEditorPlugin();
 };

@@ -60,6 +60,10 @@ String MagicleapEditorExportPlugin::_get_android_manifest_element_contents(const
 		contents += "    <uses-permission android:name=\"com.magicleap.permission.HAND_TRACKING\" />\n";
 	}
 
+	if (ProjectSettings::get_singleton()->get_setting_with_override("xr/openxr/extensions/magic_leap/marker_understanding")) {
+		contents += "    <uses-permission android:name=\"com.magicleap.permission.MARKER_TRACKING\" />\n";
+	}
+
 	// Always include this.
 	contents += "    <uses-feature android:name=\"com.magicleap.api_level\" android:version=\"20\" />\n";
 

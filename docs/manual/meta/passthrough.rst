@@ -88,6 +88,18 @@ This is because hole-punching requires the viewport's ``transparent_bg`` propert
 If you want your passthrough geometry to have hole-punching disabled, you might use a startup script similar to the one in :ref:`reconstruction-passthrough`
 **without** updating the ``environment_blend_mode``.
 
+Passthrough Loading Screen
+--------------------------
+
+When making an app that utilizes passthrough, having the app load with passthrough active might be desirable to create a smoother startup experience.
+To accomplish this, open **Project Settings**. In the **OpenXR** section, ensure that **Environment Blend Mode** is set to a value other than opaque.
+
+.. image:: img/passthrough/passthrough_loading_screen_project_settings.png
+
+With this setting updated, the app will load in passthrough if the user launches the app while their device's home environment is in passthrough.
+If your app has both an MR and VR mode, consider using :ref:`is_passthrough_preferred <class_openxrfbpassthroughextensionwrapper_method_is_passthrough_preferred>`
+to determine which mode to enter once the app has completed loading.
+
 Passthrough Filters
 -------------------
 

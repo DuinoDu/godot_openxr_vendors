@@ -206,7 +206,7 @@ Dictionary OpenXRMetaPerformanceMetricsExtensionWrapper::query_performance_metri
 	}
 
 	int counter_path_index = performance_metrics_counter_paths.find(p_counter_path);
-	ERR_FAIL_COND_V_MSG(counter_path_index < 0, Dictionary(), vformat("String \"%s\" is not a valid counter path"));
+	ERR_FAIL_COND_V_MSG(counter_path_index < 0, Dictionary(), vformat("String \"%s\" is not a valid counter path", p_counter_path));
 
 	XrPath xr_path = performance_metrics_counter_xr_paths[counter_path_index];
 	XrPerformanceMetricsCounterMETA counter = {
