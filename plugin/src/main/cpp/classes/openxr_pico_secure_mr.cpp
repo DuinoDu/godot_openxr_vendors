@@ -32,6 +32,7 @@
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/packed_int64_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <atomic>
@@ -39,7 +40,9 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -50,6 +53,137 @@ using namespace godot;
 
 namespace {
 const std::chrono::milliseconds kDefaultReadbackIntervalMs(33);
+
+int32_t _map_qnn_type(const String &type, bool &warned_float16) {
+    if (type == "QNN_DATATYPE_FLOAT_32") return XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT32_PICO;
+    if (type == "QNN_DATATYPE_FLOAT_16") {
+        warned_float16 = true;
+        return XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT32_PICO;
+    }
+    if (type == "QNN_DATATYPE_INT_32") return XR_SECURE_MR_TENSOR_DATA_TYPE_INT32_PICO;
+    if (type == "QNN_DATATYPE_INT_16") return XR_SECURE_MR_TENSOR_DATA_TYPE_INT16_PICO;
+    if (type == "QNN_DATATYPE_INT_8") return XR_SECURE_MR_TENSOR_DATA_TYPE_INT8_PICO;
+    if (type == "QNN_DATATYPE_UINT_16") return XR_SECURE_MR_TENSOR_DATA_TYPE_UINT16_PICO;
+    if (type == "QNN_DATATYPE_UINT_8") return XR_SECURE_MR_TENSOR_DATA_TYPE_UINT8_PICO;
+    return XR_SECURE_MR_TENSOR_DATA_TYPE_MAX_ENUM_PICO;
+}
+
+PackedInt32Array _trim_dimensions(const PackedInt32Array &raw_dims, int32_t &channels_out) {
+    PackedInt32Array dims = raw_dims;
+    if (dims.size() > 1 && dims[0] == 1) {
+        dims.remove_at(0);
+    }
+
+    int32_t channels = 1;
+    if (dims.size() >= 2) {
+        channels = dims[dims.size() - 1];
+        dims.resize(dims.size() - 1);
+    } else if (dims.size() > 0) {
+        channels = 1;
+    }
+
+    if (dims.is_empty()) {
+        dims.push_back(1);
+    }
+
+    if (channels > 4) {
+        dims.push_back(channels);
+        channels = 1;
+    }
+    channels_out = channels;
+    return dims;
+}
+
+PackedInt32Array _variant_to_dims(const Variant &v) {
+    PackedInt32Array dims;
+    switch (v.get_type()) {
+        case Variant::PACKED_INT32_ARRAY:
+            dims = (PackedInt32Array)v;
+            break;
+        case Variant::PACKED_INT64_ARRAY: {
+            PackedInt64Array arr = (PackedInt64Array)v;
+            dims.resize(arr.size());
+            for (int i = 0; i < arr.size(); i++) {
+                dims.set(i, (int32_t)arr[i]);
+            }
+            break;
+        }
+        case Variant::ARRAY: {
+            Array arr = (Array)v;
+            dims.resize(arr.size());
+            for (int i = 0; i < arr.size(); i++) {
+                dims.set(i, (int32_t)(int64_t)arr[i]);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return dims;
+}
+
+bool _parse_binding_array(const Dictionary &graph_info, const String &key, Array &out_bindings, Array &warnings, Array &errors) {
+    Variant raw = graph_info.get(key, Variant());
+    if (raw.get_type() != Variant::ARRAY) {
+        errors.append(vformat("Model JSON missing %s array", key));
+        return false;
+    }
+
+    Array items = raw;
+    for (int i = 0; i < items.size(); i++) {
+        if (items[i].get_type() != Variant::DICTIONARY) {
+            continue;
+        }
+        Dictionary entry = items[i];
+        if (!entry.has("info") || entry["info"].get_type() != Variant::DICTIONARY) {
+            continue;
+        }
+        Dictionary info = entry["info"];
+
+        String name = info.get("name", String());
+        String qnn_type = info.get("dataType", String());
+        PackedInt32Array qnn_dims = _variant_to_dims(info.get("dimensions", Variant()));
+        if (name.is_empty() || qnn_type.is_empty() || qnn_dims.is_empty()) {
+            continue;
+        }
+
+        bool warned_float16 = false;
+        int32_t mapped_type = _map_qnn_type(qnn_type, warned_float16);
+        if (mapped_type == XR_SECURE_MR_TENSOR_DATA_TYPE_MAX_ENUM_PICO) {
+            errors.append(vformat("Tensor %s has unsupported data type %s", name, qnn_type));
+            continue;
+        }
+
+        int32_t channels = 1;
+        PackedInt32Array dims = _trim_dimensions(qnn_dims, channels);
+        if (channels <= 0 || channels > std::numeric_limits<int8_t>::max()) {
+            errors.append(vformat("Tensor %s has unsupported channel count %d", name, channels));
+            continue;
+        }
+
+        int32_t usage = (dims.size() <= 1 && channels == 1) ? XR_SECURE_MR_TENSOR_TYPE_SCALAR_PICO : XR_SECURE_MR_TENSOR_TYPE_MAT_PICO;
+
+        Dictionary binding;
+        binding["name"] = name;
+        binding["dimensions"] = dims;
+        binding["channels"] = channels;
+        binding["usage"] = usage;
+        binding["data_type"] = mapped_type;
+        binding["qnn_type"] = qnn_type;
+        binding["qnn_dims"] = qnn_dims;
+        out_bindings.append(binding);
+
+        if (warned_float16) {
+            warnings.append(vformat("Tensor %s uses QNN float16; mapped to FLOAT32", name));
+        }
+    }
+
+    if (out_bindings.is_empty()) {
+        errors.append(vformat("No valid %s entries found", key));
+        return false;
+    }
+    return true;
+}
 } // namespace
 
 struct OpenXRPicoSecureMR::TensorReadbackWorker {
@@ -351,6 +485,158 @@ OpenXRPicoSecureMR::~OpenXRPicoSecureMR() {
     singleton = nullptr;
 }
 
+Dictionary OpenXRPicoSecureMR::prepare_bindings(const Dictionary &model_json) {
+    Dictionary out;
+    Array warnings;
+    Array errors;
+
+    Variant info_var = model_json.get("info", Variant());
+    if (info_var.get_type() != Variant::DICTIONARY) {
+        errors.append("Model JSON missing top-level info");
+    } else {
+        Dictionary info = (Dictionary)info_var;
+        Variant graphs_raw = info.get("graphs", Variant());
+        if (graphs_raw.get_type() != Variant::ARRAY) {
+            errors.append("Model JSON missing graphs array");
+        } else {
+            Array graphs = graphs_raw;
+            if (graphs.is_empty() || graphs[0].get_type() != Variant::DICTIONARY) {
+                errors.append("Model JSON graphs array empty");
+            } else {
+                Dictionary graph = graphs[0];
+                if (!graph.has("info") || graph["info"].get_type() != Variant::DICTIONARY) {
+                    errors.append("Model JSON graph missing info");
+                } else {
+                    Dictionary graph_info = graph["info"];
+                    out["model_name"] = graph_info.get("graphName", String("model"));
+
+                    Array inputs;
+                    Array outputs;
+                    bool inputs_ok = _parse_binding_array(graph_info, "graphInputs", inputs, warnings, errors);
+                    bool outputs_ok = _parse_binding_array(graph_info, "graphOutputs", outputs, warnings, errors);
+                    out["inputs"] = inputs;
+                    out["outputs"] = outputs;
+                    if (!inputs_ok || !outputs_ok) {
+                        // errors already appended
+                    }
+                }
+            }
+        }
+    }
+
+    out["warnings"] = warnings;
+    out["errors"] = errors;
+    out["ok"] = errors.is_empty();
+    return out;
+}
+
+int64_t OpenXRPicoSecureMR::bytes_per_element(int32_t data_type) const {
+    switch (data_type) {
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT8_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT8_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_DYNAMIC_TEXTURE_UINT8_PICO:
+            return 1;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT16_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT16_PICO:
+            return 2;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT32_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT32_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_DYNAMIC_TEXTURE_FLOAT32_PICO:
+            return 4;
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT64_PICO:
+            return 8;
+        default:
+            return 0;
+    }
+}
+
+int64_t OpenXRPicoSecureMR::element_count(const PackedInt32Array &dimensions, int32_t channels) const {
+    int64_t count = 1;
+    for (int i = 0; i < dimensions.size(); i++) {
+        count *= (int64_t)dimensions[i];
+    }
+    count *= (int64_t)channels;
+    return count;
+}
+
+PackedByteArray OpenXRPicoSecureMR::generate_random_data(const PackedInt32Array &dimensions, int32_t channels, int32_t data_type) const {
+    PackedByteArray out;
+    int64_t bytes = element_count(dimensions, channels) * bytes_per_element(data_type);
+    if (bytes <= 0) {
+        return out;
+    }
+    out.resize((int32_t)bytes);
+
+    std::mt19937 rng(std::random_device{}());
+    uint8_t *ptr = out.ptrw();
+
+    switch (data_type) {
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT32_PICO: {
+            float *fp = reinterpret_cast<float *>(ptr);
+            int64_t count = bytes / (int64_t)sizeof(float);
+            std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+            for (int64_t i = 0; i < count; i++) {
+                fp[i] = dist(rng);
+            }
+            break;
+        }
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_FLOAT64_PICO: {
+            double *dp = reinterpret_cast<double *>(ptr);
+            int64_t count = bytes / (int64_t)sizeof(double);
+            std::uniform_real_distribution<double> dist(-1.0, 1.0);
+            for (int64_t i = 0; i < count; i++) {
+                dp[i] = dist(rng);
+            }
+            break;
+        }
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT32_PICO: {
+            int32_t *ip = reinterpret_cast<int32_t *>(ptr);
+            int64_t count = bytes / (int64_t)sizeof(int32_t);
+            std::uniform_int_distribution<int32_t> dist(-128, 128);
+            for (int64_t i = 0; i < count; i++) {
+                ip[i] = dist(rng);
+            }
+            break;
+        }
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT16_PICO: {
+            int16_t *ip = reinterpret_cast<int16_t *>(ptr);
+            int64_t count = bytes / (int64_t)sizeof(int16_t);
+            std::uniform_int_distribution<int16_t> dist(-128, 128);
+            for (int64_t i = 0; i < count; i++) {
+                ip[i] = dist(rng);
+            }
+            break;
+        }
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_INT8_PICO: {
+            std::uniform_int_distribution<int16_t> dist(-16, 16);
+            for (int64_t i = 0; i < bytes; i++) {
+                ptr[i] = (uint8_t)dist(rng);
+            }
+            break;
+        }
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT16_PICO: {
+            uint16_t *up = reinterpret_cast<uint16_t *>(ptr);
+            int64_t count = bytes / (int64_t)sizeof(uint16_t);
+            std::uniform_int_distribution<uint16_t> dist(0, 255);
+            for (int64_t i = 0; i < count; i++) {
+                up[i] = dist(rng);
+            }
+            break;
+        }
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_UINT8_PICO:
+        case XR_SECURE_MR_TENSOR_DATA_TYPE_DYNAMIC_TEXTURE_UINT8_PICO: {
+            std::uniform_int_distribution<uint16_t> dist(0, 255);
+            for (int64_t i = 0; i < bytes; i++) {
+                ptr[i] = (uint8_t)dist(rng);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return out;
+}
+
 bool OpenXRPicoSecureMR::is_supported() const {
     const bool has_wrapper = wrapper != nullptr;
     const bool ext_supported = has_wrapper ? wrapper->is_secure_mr_supported() : false;
@@ -386,6 +672,20 @@ uint64_t OpenXRPicoSecureMR::create_pipeline_tensor_shape(uint64_t pipeline_hand
 uint64_t OpenXRPicoSecureMR::create_global_tensor_shape(uint64_t framework_handle, const PackedInt32Array &dimensions, int32_t data_type, int32_t channels, int32_t tensor_type, bool placeholder) {
     ERR_FAIL_NULL_V(wrapper, 0);
     return wrapper->create_global_tensor_shape(framework_handle, dimensions, data_type, channels, tensor_type, placeholder);
+}
+
+void OpenXRPicoSecureMR::reset_global_tensor_bytes(uint64_t tensor_handle, PackedByteArray data) {
+    if (!wrapper || tensor_handle == 0) {
+        return;
+    }
+    wrapper->reset_global_tensor_bytes(tensor_handle, data);
+}
+
+void OpenXRPicoSecureMR::reset_global_tensor_floats(uint64_t tensor_handle, PackedFloat32Array data) {
+    if (!wrapper || tensor_handle == 0) {
+        return;
+    }
+    wrapper->reset_global_tensor_floats(tensor_handle, data);
 }
 
 uint64_t OpenXRPicoSecureMR::create_pipeline_tensor_gltf(uint64_t pipeline_handle, const PackedByteArray &buffer, bool placeholder) {
@@ -1156,6 +1456,10 @@ void OpenXRPicoSecureMR::_bind_methods() {
     ClassDB::bind_static_method("OpenXRPicoSecureMR", D_METHOD("get_singleton"), &OpenXRPicoSecureMR::get_singleton);
 
     ClassDB::bind_method(D_METHOD("is_supported"), &OpenXRPicoSecureMR::is_supported);
+    ClassDB::bind_method(D_METHOD("prepare_bindings", "model_json"), &OpenXRPicoSecureMR::prepare_bindings);
+    ClassDB::bind_method(D_METHOD("bytes_per_element", "data_type"), &OpenXRPicoSecureMR::bytes_per_element);
+    ClassDB::bind_method(D_METHOD("element_count", "dimensions", "channels"), &OpenXRPicoSecureMR::element_count);
+    ClassDB::bind_method(D_METHOD("generate_random_data", "dimensions", "channels", "data_type"), &OpenXRPicoSecureMR::generate_random_data);
 
     ClassDB::bind_method(D_METHOD("create_framework", "image_width", "image_height"), &OpenXRPicoSecureMR::create_framework);
     ClassDB::bind_method(D_METHOD("destroy_framework", "framework_handle"), &OpenXRPicoSecureMR::destroy_framework);
@@ -1166,6 +1470,8 @@ void OpenXRPicoSecureMR::_bind_methods() {
     ClassDB::bind_method(D_METHOD("create_global_tensor_shape", "framework_handle", "dimensions", "data_type", "channels", "tensor_type", "placeholder"), &OpenXRPicoSecureMR::create_global_tensor_shape);
     ClassDB::bind_method(D_METHOD("create_pipeline_tensor_gltf", "pipeline_handle", "buffer", "placeholder"), &OpenXRPicoSecureMR::create_pipeline_tensor_gltf);
     ClassDB::bind_method(D_METHOD("create_global_tensor_gltf", "framework_handle", "buffer", "placeholder"), &OpenXRPicoSecureMR::create_global_tensor_gltf);
+    ClassDB::bind_method(D_METHOD("reset_global_tensor_bytes", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_global_tensor_bytes);
+    ClassDB::bind_method(D_METHOD("reset_global_tensor_floats", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_global_tensor_floats);
 
     ClassDB::bind_method(D_METHOD("reset_pipeline_tensor_bytes", "pipeline_handle", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_pipeline_tensor_bytes);
     ClassDB::bind_method(D_METHOD("reset_pipeline_tensor_floats", "pipeline_handle", "tensor_handle", "data"), &OpenXRPicoSecureMR::reset_pipeline_tensor_floats);

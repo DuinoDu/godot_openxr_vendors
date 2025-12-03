@@ -393,6 +393,18 @@ uint64_t OpenXRPicoSecureMRExtensionWrapper::create_global_tensor_shape(uint64_t
     return (uint64_t)tensor;
 }
 
+void OpenXRPicoSecureMRExtensionWrapper::reset_global_tensor_bytes(uint64_t tensor_handle, PackedByteArray data) {
+    if (tensor_handle == 0) return;
+    XrSecureMrTensorBufferPICO buf = { XR_TYPE_SECURE_MR_TENSOR_BUFFER_PICO, nullptr, (uint32_t)data.size(), (void *)data.ptrw() };
+    xrResetSecureMrTensorPICO((XrSecureMrTensorPICO)tensor_handle, &buf);
+}
+
+void OpenXRPicoSecureMRExtensionWrapper::reset_global_tensor_floats(uint64_t tensor_handle, PackedFloat32Array data) {
+    if (tensor_handle == 0) return;
+    XrSecureMrTensorBufferPICO buf = { XR_TYPE_SECURE_MR_TENSOR_BUFFER_PICO, nullptr, (uint32_t)(data.size() * sizeof(float)), (void *)data.ptrw() };
+    xrResetSecureMrTensorPICO((XrSecureMrTensorPICO)tensor_handle, &buf);
+}
+
 void OpenXRPicoSecureMRExtensionWrapper::reset_pipeline_tensor_bytes(uint64_t pipeline_handle, uint64_t tensor_handle, PackedByteArray data) {
     XrSecureMrPipelinePICO pipeline = (XrSecureMrPipelinePICO)pipeline_handle;
     XrSecureMrPipelineTensorPICO tensor = (XrSecureMrPipelineTensorPICO)tensor_handle;

@@ -60,6 +60,12 @@ public:
     // Capability
     bool is_supported() const;
 
+    // Utility helpers mirroring SecureMR utils.
+    Dictionary prepare_bindings(const Dictionary &model_json);
+    int64_t bytes_per_element(int32_t data_type) const;
+    int64_t element_count(const PackedInt32Array &dimensions, int32_t channels) const;
+    PackedByteArray generate_random_data(const PackedInt32Array &dimensions, int32_t channels, int32_t data_type) const;
+
     // Framework / pipeline lifecycle
     uint64_t create_framework(int32_t image_width, int32_t image_height);
     void destroy_framework(uint64_t framework_handle);
@@ -71,6 +77,8 @@ public:
     uint64_t create_global_tensor_shape(uint64_t framework_handle, const PackedInt32Array &dimensions, int32_t data_type, int32_t channels, int32_t tensor_type, bool placeholder);
     uint64_t create_pipeline_tensor_gltf(uint64_t pipeline_handle, const PackedByteArray &buffer, bool placeholder);
     uint64_t create_global_tensor_gltf(uint64_t framework_handle, const PackedByteArray &buffer, bool placeholder);
+    void reset_global_tensor_bytes(uint64_t tensor_handle, PackedByteArray data);
+    void reset_global_tensor_floats(uint64_t tensor_handle, PackedFloat32Array data);
 
     // Tensor content
     void reset_pipeline_tensor_bytes(uint64_t pipeline_handle, uint64_t tensor_handle, const PackedByteArray &data);

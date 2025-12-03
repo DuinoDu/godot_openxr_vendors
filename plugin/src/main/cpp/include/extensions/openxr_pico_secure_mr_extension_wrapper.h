@@ -87,6 +87,8 @@ public:
     // Tensors
     uint64_t create_pipeline_tensor_shape(uint64_t pipeline_handle, PackedInt32Array dimensions, int32_t data_type, int32_t channels, int32_t tensor_type, bool placeholder);
     uint64_t create_global_tensor_shape(uint64_t framework_handle, PackedInt32Array dimensions, int32_t data_type, int32_t channels, int32_t tensor_type, bool placeholder);
+    void reset_global_tensor_bytes(uint64_t tensor_handle, PackedByteArray data);
+    void reset_global_tensor_floats(uint64_t tensor_handle, PackedFloat32Array data);
 
     // GLTF tensors
     uint64_t create_pipeline_tensor_gltf(uint64_t pipeline_handle, PackedByteArray buffer, bool placeholder);
