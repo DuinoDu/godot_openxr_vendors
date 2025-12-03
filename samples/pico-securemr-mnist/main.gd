@@ -1,7 +1,6 @@
 extends Node3D
 
-const MODEL_DIR_PROP := "debug.securemr.model_inspect.model_dir"
-const INPUT_PROP := "debug.securemr.model_inspect.input"
+const DEFAULT_MODEL_DIR := "user://assets"
 const MODEL_BIN := "model.serialized.bin"
 const MODEL_JSON := "model.serialized.json"
 const FRAMEWORK_WIDTH := 640
@@ -27,6 +26,7 @@ const MODEL_ENCODING_UFIXED_POINT8 := 2
 const MODEL_ENCODING_SFIXED_POINT8 := 3
 const MODEL_ENCODING_UFIXED_POINT16 := 4
 const MODEL_ENCODING_INT32 := 5
+const CAMERA_PERMISSION := "android.permission.CAMERA"
 
 var securemr: OpenXRPicoSecureMR
 var framework_handle: int = 0
@@ -47,16 +47,28 @@ var _submitted := false
 var _readback_done := false
 var _submit_time_ms: int = 0
 var _remaining_outputs := 0
+var _xr_interface: XRInterface = null
 
 func _ready() -> void:
 	set_process(false)
 	if Engine.is_editor_hint():
 		return
 
-	var oxr = XRServer.find_interface("OpenXR")
-	if oxr:
-		oxr.session_begun.connect(_on_openxr_session_begun, CONNECT_DEFERRED)
-		if oxr.is_initialized():
+	_ensure_camera_permission()
+
+	_xr_interface = XRServer.find_interface("OpenXR")
+	if _xr_interface:
+		if not _xr_interface.is_initialized():
+			var ok: bool = _xr_interface.initialize()
+			if not ok:
+				printerr("[ModelInspect] Failed to initialize OpenXR interface.")
+				return
+			print("[ModelInspect] OpenXR interface initialized.")
+		XRServer.set_primary_interface(_xr_interface)
+		_enable_xr_viewport()
+		_enable_passthrough(true)
+		_xr_interface.session_begun.connect(_on_openxr_session_begun, CONNECT_DEFERRED)
+		if _xr_interface.is_initialized():
 			_on_openxr_session_begun()
 	else:
 		printerr("[ModelInspect] OpenXR interface not found.")
@@ -75,9 +87,26 @@ func _exit_tree() -> void:
 func _on_openxr_session_begun() -> void:
 	if _initialized:
 		return
+	_enable_xr_viewport()
+	_enable_passthrough(true)
 	_initialized = true
 	_init_ok = _initialize_pipeline()
 	set_process(true)
+
+func _enable_xr_viewport() -> void:
+	if _xr_interface and _xr_interface.is_initialized():
+		get_viewport().use_xr = true
+
+func _enable_passthrough(enable: bool) -> void:
+	if not _xr_interface or not _xr_interface.is_initialized():
+		return
+	var supported = _xr_interface.get_supported_environment_blend_modes()
+	if enable and XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND in supported:
+		_xr_interface.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND
+		get_viewport().transparent_bg = true
+	elif XRInterface.XR_ENV_BLEND_MODE_OPAQUE in supported:
+		_xr_interface.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_OPAQUE
+		get_viewport().transparent_bg = false
 
 func _process(_delta: float) -> void:
 	if not _init_ok:
@@ -100,13 +129,14 @@ func _initialize_pipeline() -> bool:
 		printerr("[ModelInspect] SecureMR extension not supported on this runtime.")
 		return false
 
-	var model_dir := _read_property(MODEL_DIR_PROP)
-	var input_path := _read_property(INPUT_PROP)
-	print("[ModelInspect] %s=%s" % [MODEL_DIR_PROP, model_dir])
-	print("[ModelInspect] %s=%s" % [INPUT_PROP, input_path])
-	if model_dir.is_empty():
-		printerr("[ModelInspect] Model directory property is empty; aborting initialization.")
+	var model_dir := ProjectSettings.globalize_path(DEFAULT_MODEL_DIR)
+	if not _ensure_model_assets(model_dir):
+		printerr("[ModelInspect] Failed to stage model assets into %s" % model_dir)
 		return false
+	var input_path := ""
+	var candidate_input := model_dir.path_join("input.bin")
+	if FileAccess.file_exists(candidate_input):
+		input_path = candidate_input
 
 	var bin_path := model_dir.path_join(MODEL_BIN)
 	var json_path := model_dir.path_join(MODEL_JSON)
@@ -349,3 +379,33 @@ func _read_property(prop: String) -> String:
 	if exit_code != 0 or output.is_empty():
 		return ""
 	return output[0].strip_edges()
+
+func _ensure_camera_permission() -> void:
+	if not OS.has_feature("Android"):
+		return
+	if not OS.has_permission(CAMERA_PERMISSION):
+		OS.request_permission(CAMERA_PERMISSION)
+
+func _ensure_model_assets(model_dir: String) -> bool:
+	DirAccess.make_dir_recursive_absolute(model_dir)
+	var files := [
+		{"src": "res://assets/mnist.serialized.bin", "dst": model_dir.path_join(MODEL_BIN)},
+		{"src": "res://assets/mnist.serialized.json", "dst": model_dir.path_join(MODEL_JSON)},
+	]
+	for f in files:
+		var src: String = f["src"]
+		var dst: String = f["dst"]
+		if FileAccess.file_exists(dst):
+			continue
+		var data := FileAccess.get_file_as_bytes(src)
+		if data.is_empty():
+			printerr("[ModelInspect] Failed to copy %s to %s" % [src, dst])
+			return false
+		var fh := FileAccess.open(dst, FileAccess.WRITE)
+		if fh == null:
+			printerr("[ModelInspect] Failed to open %s for writing" % dst)
+			return false
+		fh.store_buffer(data)
+		fh.close()
+		print("[ModelInspect] Staged %s -> %s" % [src, dst])
+	return true

@@ -1,4 +1,3 @@
-class_name StartXR
 extends Node3D
 
 signal focus_lost
@@ -12,13 +11,21 @@ var xr_is_focussed := false
 
 func _ready():
 	xr_interface = XRServer.find_interface("OpenXR")
+	var vp: Viewport = get_viewport()
 	if xr_interface and xr_interface.is_initialized():
-		var vp: Viewport = get_viewport()
 		vp.use_xr = true
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 
-		if not OS.has_feature("headless") and RenderingServer.get_rendering_device():
-			vp.vrs_mode = Viewport.VRS_XR
+	# Fallback: initialize if not already initialized
+	if xr_interface and not xr_interface.is_initialized():
+		if xr_interface.initialize():
+			vp.use_xr = true
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		else:
+			print("OpenXR failed to initialize.")
+
+	if not OS.has_feature("headless") and RenderingServer.get_rendering_device():
+		vp.vrs_mode = Viewport.VRS_XR
 
 		xr_interface.session_begun.connect(_on_openxr_session_begun)
 		xr_interface.session_visible.connect(_on_openxr_visible_state)
