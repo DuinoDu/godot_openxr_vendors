@@ -384,20 +384,23 @@ private:
             return false;
         }
 
-        XrResult result;
-        while (true) {
+        XrResult result = XR_SUCCESS;
+        while (running.load(std::memory_order_acquire)) {
             completion = {};
             completion.type = XR_TYPE_CREATE_BUFFER_FROM_GLOBAL_TENSOR_COMPLETION_PICO;
             completion.next = nullptr;
             completion.futureResult = XR_SUCCESS;
             completion.tensorBuffer = &buffer;
-            while (running.load(std::memory_order_acquire)) {
-                result = readback_wrapper->xrCreateBufferFromGlobalTensorCompletePICO(tensor_handle, future, &completion);
-                if (result == XR_SUCCESS) {
-                    return true;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+            result = readback_wrapper->xrCreateBufferFromGlobalTensorCompletePICO(tensor_handle, future, &completion);
+            if (result == XR_SUCCESS) {
+                return true;
             }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        if (result != XR_SUCCESS) {
             UtilityFunctions::printerr("[SecureMRReadback] xrCreateBufferFromGlobalTensorCompletePICO failed for ",
                     state.target.name, " (result=", (int)result, ")");
         }
