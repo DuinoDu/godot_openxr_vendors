@@ -887,6 +887,7 @@ Array OpenXRPicoSecureMR::poll_tensor_readback(uint64_t readback_handle) {
     }
 
     std::vector<TensorReadbackWorker::Result> results = worker->pop_results();
+    // UtilityFunctions::print("[SecureMRReadback] results.size=", results.size());
     for (auto &result : results) {
         Dictionary entry;
         entry["name"] = result.name;
@@ -910,6 +911,7 @@ Array OpenXRPicoSecureMR::poll_tensor_readback(uint64_t readback_handle) {
         entry["future_result"] = (int32_t)result.future_result;
 
         out.append(entry);
+        // UtilityFunctions::printerr("[SecureMRReadback] result name=", result.name, ", data size=", result.data.size());
     }
 
     return out;
